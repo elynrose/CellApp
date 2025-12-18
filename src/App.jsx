@@ -2004,7 +2004,7 @@ function App() {
                         setShowProfile(true);
                         setShowUserMenu(false);
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:bg-white/10 rounded-lg transition-colors"
+                      className="w-full flex items-center justify-start gap-2 px-3 py-2 text-sm text-left text-gray-300 hover:bg-white/10 rounded-lg transition-colors"
                     >
                       <User size={16} />
                       <span>Profile</span>
@@ -2014,10 +2014,10 @@ function App() {
                         setShowSubscription(true);
                         setShowUserMenu(false);
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:bg-white/10 rounded-lg transition-colors"
+                      className="w-full flex items-center justify-start gap-2 px-3 py-2 text-sm text-left text-gray-300 hover:bg-white/10 rounded-lg transition-colors"
                     >
                       <Crown size={16} />
-                      <span>Subscription & Credits</span>
+                      <span>Subscriptions</span>
                       {userCredits && (
                         <span className="ml-auto text-xs font-semibold text-blue-400">
                           {userCredits.credits?.current || 0}
@@ -2030,7 +2030,7 @@ function App() {
                           setShowAdmin(true);
                           setShowUserMenu(false);
                         }}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:bg-white/10 rounded-lg transition-colors"
+                        className="w-full flex items-center justify-start gap-2 px-3 py-2 text-sm text-left text-gray-300 hover:bg-white/10 rounded-lg transition-colors"
                       >
                         <Shield size={16} />
                         <span>Admin Dashboard</span>
@@ -2041,7 +2041,7 @@ function App() {
                         setShowUserMenu(false);
                         await signOutUser();
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
+                      className="w-full flex items-center justify-start gap-2 px-3 py-2 text-sm text-left text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
                     >
                       <LogOut size={16} />
                       <span>Sign Out</span>
