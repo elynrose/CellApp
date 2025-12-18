@@ -1,4 +1,4 @@
-// Template definitions for the GPT Cells App
+// Template definitions for the Draftai App
 // Each template defines a workflow with multiple connected cells
 
 export const TEMPLATES = {

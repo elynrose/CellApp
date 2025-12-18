@@ -1,5 +1,5 @@
 /**
- * GPT Cells Application Server
+ * Draftai Application Server
  * A Node.js server providing AI-powered spreadsheet functionality
  * with support for text, image, video, and audio generation
  */

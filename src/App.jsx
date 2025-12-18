@@ -1842,7 +1842,7 @@ function App() {
             <div className="w-16 h-16 rounded-xl bg-gradient-to-tr from-blue-500 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/20 mx-auto mb-4">
               <Box size={32} strokeWidth={2.5} />
             </div>
-            <h1 className="text-2xl font-bold text-white mb-2">GPT Cells</h1>
+            <h1 className="text-2xl font-bold text-white mb-2">Draftai</h1>
             <p className="text-gray-400">AI-powered spreadsheet platform</p>
           </div>
           <button
@@ -1882,7 +1882,7 @@ function App() {
           </div>
           <div className="flex flex-col">
             <h1 className="text-xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-300">
-              GPT Cells
+              Draftai
             </h1>
             <span className="text-[10px] text-gray-400 font-medium tracking-wider uppercase">Beta v2.0</span>
           </div>

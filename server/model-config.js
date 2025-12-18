@@ -1,5 +1,5 @@
 /**
- * Model Configuration for GPT Cells App
+ * Model Configuration for Draftai App
  * This file defines the supported models and their capabilities
  */
 

@@ -1,6 +1,6 @@
 # Stripe Subscription Setup Guide
 
-This guide will help you set up Stripe subscriptions for the GPT Cells application.
+This guide will help you set up Stripe subscriptions for the Draftai application.
 
 ## Prerequisites
 
