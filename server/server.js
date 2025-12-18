@@ -1,6 +1,6 @@
 /**
  * Draftai Application Server
- * A Node.js server providing AI-powered spreadsheet functionality
+ * A Node.js server providing AI-powered brainstorming functionality
  * with support for text, image, video, and audio generation
  */
 

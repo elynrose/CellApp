@@ -1835,15 +1835,173 @@ function App() {
   }
 
   if (!user) {
+    // Demo cards data - all related to launching a Smart Task Management App
+    const demoCards = [
+      {
+        id: 'A1',
+        name: 'Product Concept',
+        prompt: 'Define the core concept for a smart task management app',
+        output: '**SmartTask - AI-Powered Task Management**\n\nA task management app that uses AI to:\n- Auto-prioritize tasks based on deadlines & importance\n- Suggest optimal work schedules\n- Break down complex projects into actionable steps\n- Learn from user patterns to improve suggestions\n- Integrate with calendar, email, and productivity tools\n\n**Key Differentiator:** Proactive AI assistant vs reactive task lists',
+        x: 50,
+        y: 50,
+        width: 300
+      },
+      {
+        id: 'B1',
+        name: 'Marketing Strategy',
+        prompt: 'Create a 3-month marketing strategy for SmartTask launch',
+        output: '**Month 1: Foundation**\n- Launch website & SEO optimization\n- Content marketing: 8 blog posts on productivity\n- Social media presence (LinkedIn, Twitter)\n- Product Hunt launch preparation\n\n**Month 2: Growth**\n- Paid ads: Google & Facebook targeting professionals\n- Webinar series: "Master Your Productivity"\n- Influencer partnerships with productivity coaches\n\n**Month 3: Scale**\n- Referral program launch (invite 3, get premium)\n- Case studies & user testimonials\n- Email marketing campaigns to early adopters',
+        x: 1660,
+        y: 80,
+        width: 300
+      },
+      {
+        id: 'C1',
+        name: 'User Personas',
+        prompt: 'Define 3 user personas for SmartTask app',
+        output: '**Persona 1: Sarah, 28 - Busy Professional**\n- Marketing manager, juggles 10+ projects\n- Values: Time-saving, automation, mobile access\n- Goals: Reduce overwhelm, meet deadlines\n- Pain: Too many tools, tasks slip through cracks\n\n**Persona 2: Mike, 35 - Freelancer**\n- Works with multiple clients, needs organization\n- Values: Simplicity, affordability, flexibility\n- Goals: Track all client work, never miss deadlines\n\n**Persona 3: Lisa, 42 - Team Lead**\n- Manages 5-person team, needs visibility\n- Values: Collaboration, reporting, integrations\n- Goals: Team alignment, project transparency',
+        x: 1275,
+        y: 679,
+        width: 300
+      },
+      {
+        id: 'A2',
+        name: 'Content Ideas',
+        prompt: 'Generate 10 blog post ideas for SmartTask marketing',
+        output: '1. "5 Ways AI Can Transform Your Task Management"\n2. "Why Traditional To-Do Lists Fail (And What Works Instead)"\n3. "How to Prioritize Tasks When Everything Feels Urgent"\n4. "The Psychology of Productivity: What Science Says"\n5. "Task Management for Remote Teams: Best Practices"\n6. "From Overwhelmed to Organized: A 30-Day Guide"\n7. "The Hidden Cost of Context Switching"\n8. "How Successful People Manage Their Daily Tasks"\n9. "Task Management Tools Comparison: 2024 Edition"\n10. "Building Better Work Habits with SmartTask"',
+        x: 1827,
+        y: 617,
+        width: 300
+      },
+      {
+        id: 'B2',
+        name: 'Feature List',
+        prompt: 'List key features for SmartTask app',
+        output: '**Core Features:**\n✓ AI-powered task prioritization\n✓ Smart scheduling suggestions\n✓ Project breakdown automation\n✓ Real-time collaboration\n✓ Calendar & email integration\n✓ Mobile apps (iOS & Android)\n✓ Custom workflows & templates\n✓ Progress tracking & analytics\n✓ Team workspaces\n✓ Slack, Google Workspace integrations\n✓ Recurring task automation\n✓ Deadline reminders & notifications',
+        x: 400,
+        y: 628,
+        width: 300
+      },
+      {
+        id: 'C2',
+        name: 'Competitive Analysis',
+        prompt: 'Analyze top 3 competitors in the task management space',
+        output: '**1. Asana**\nStrengths: Robust features, great for teams\nWeaknesses: Complex, expensive, learning curve\n\n**2. Todoist**\nStrengths: Simple, clean interface, natural language\nWeaknesses: Limited AI, basic collaboration\n\n**3. Notion**\nStrengths: All-in-one workspace, flexible\nWeaknesses: Not task-focused, can be overwhelming\n\n**Our Opportunity:**\nAI-first approach with intelligent automation that competitors lack. Focus on reducing cognitive load rather than adding features.',
+        x: 1000,
+        y: 39,
+        width: 300
+      }
+    ];
+
+    // Demo connections (showing relationships between cards)
+    const demoConnections = [
+      { from: 'A1', to: 'B1' }, // Product Ideas -> Marketing Strategy
+      { from: 'A1', to: 'C1' }, // Product Ideas -> User Personas
+      { from: 'B1', to: 'A2' }, // Marketing Strategy -> Content Ideas
+      { from: 'C1', to: 'B2' }, // User Personas -> Feature List
+      { from: 'B2', to: 'C2' }, // Feature List -> Competitive Analysis
+    ];
+
+    // Helper to get connection port coordinates
+    const getPortCoords = (cardId, type) => {
+      const card = demoCards.find(c => c.id === cardId);
+      if (!card) return { x: 0, y: 0 };
+      const cardWidth = card.width;
+      const offsetY = 50; // Middle of header
+      if (type === 'source') return { x: card.x + cardWidth, y: card.y + offsetY };
+      if (type === 'target') return { x: card.x, y: card.y + offsetY };
+      return { x: 0, y: 0 };
+    };
+
+    // Render connection path
+    const renderConnection = (from, to) => {
+      const start = getPortCoords(from, 'source');
+      const end = getPortCoords(to, 'target');
+      const deltaX = Math.abs(end.x - start.x);
+      const controlPoint1 = { x: start.x + deltaX * 0.5, y: start.y };
+      const controlPoint2 = { x: end.x - deltaX * 0.5, y: end.y };
+      const pathData = `M ${start.x} ${start.y} C ${controlPoint1.x} ${controlPoint1.y}, ${controlPoint2.x} ${controlPoint2.y}, ${end.x} ${end.y}`;
+      
+      return (
+        <path
+          key={`${from}-${to}`}
+          d={pathData}
+          fill="none"
+          stroke="#10b981"
+          strokeWidth="2.5"
+          strokeDasharray="5,5"
+          opacity={0.6}
+          markerEnd="url(#arrowhead-demo)"
+        />
+      );
+    };
+
     return (
-      <div className="h-screen flex items-center justify-center mesh-gradient">
-        <div className="glass-panel p-8 rounded-2xl max-w-md w-full mx-4">
+      <div className="h-screen flex items-center justify-center mesh-gradient relative overflow-hidden">
+        {/* Demo cards and connections behind login */}
+        <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 1 }}>
+          {/* SVG for connections */}
+          <svg
+            className="absolute top-0 left-0 w-full h-full pointer-events-none overflow-visible"
+            style={{ zIndex: 0 }}
+          >
+            <defs>
+              <marker
+                id="arrowhead-demo"
+                markerWidth="10"
+                markerHeight="7"
+                refX="10"
+                refY="3.5"
+                orient="auto"
+              >
+                <polygon points="0 0, 10 3.5, 0 7" fill="#10b981" opacity="0.6" />
+              </marker>
+            </defs>
+            {demoConnections.map(conn => renderConnection(conn.from, conn.to))}
+          </svg>
+
+          {/* Demo Cards */}
+          {demoCards.map(card => (
+            <div
+              key={card.id}
+              className="glass-card rounded-2xl flex flex-col absolute"
+              style={{
+                width: `${card.width}px`,
+                left: `${card.x}px`,
+                top: `${card.y}px`,
+                minHeight: '200px',
+                opacity: 0.75
+              }}
+            >
+              {/* Card Header with icon */}
+              <div className="flex items-center justify-between p-4 border-b border-white/10">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-blue-500/20 border border-blue-400/30 flex items-center justify-center">
+                    <span className="text-xs font-mono text-blue-400 font-bold">{card.id}</span>
+                  </div>
+                  <span className="text-sm font-semibold text-white">{card.name}</span>
+                </div>
+              </div>
+              
+              {/* Card Content */}
+              <div className="p-4 flex-1 overflow-y-auto">
+                <div className="text-xs text-gray-400 mb-2 italic line-clamp-2">{card.prompt}</div>
+                <div className="text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">
+                  {card.output}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Login box */}
+        <div className="glass-panel p-8 rounded-2xl max-w-md w-full mx-4 relative z-10">
           <div className="text-center mb-6">
             <div className="w-16 h-16 rounded-xl bg-gradient-to-tr from-blue-500 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/20 mx-auto mb-4">
               <Box size={32} strokeWidth={2.5} />
             </div>
             <h1 className="text-2xl font-bold text-white mb-2">Draftai</h1>
-            <p className="text-gray-400">AI-powered spreadsheet platform</p>
+            <p className="text-gray-400">AI-powered brainstorming</p>
           </div>
           <button
             onClick={async () => {
