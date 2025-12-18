@@ -6,12 +6,14 @@ import { runCell, runCells, formatOutput, pollJobStatus, cancelPolling } from '.
 import { parseDependencies, findDependentCells } from './utils/dependencies';
 import { getModelType } from './api';
 import Canvas from './components/Canvas';
-import { Plus, Box, Grid, Trash2, Play, LogOut, User, Shield, Crown, X, AlertCircle, Sparkles, Check, Edit2, GripVertical, ChevronDown, FolderOpen, Copy } from 'lucide-react';
+import { Plus, Box, Grid, Trash2, Play, LogOut, User, Shield, Crown, X, AlertCircle, Sparkles, Check, Edit2, GripVertical, ChevronDown, FolderOpen, Copy, FileText, Download } from 'lucide-react';
+import jsPDF from 'jspdf';
 import { signInWithGoogle, signOutUser, isCurrentUserAdmin } from './firebase/auth';
 import AdminDashboard from './components/AdminDashboard';
 import SubscriptionModal from './components/SubscriptionModal';
 import TemplateModal from './components/TemplateModal';
 import UserProfile from './components/UserProfile';
+import GenerationSelectModal from './components/GenerationSelectModal';
 
 function App() {
   const navigate = useNavigate();
@@ -32,6 +34,7 @@ function App() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [showSubscription, setShowSubscription] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
+  const [showGenerationSelect, setShowGenerationSelect] = useState(false);
   const [userCredits, setUserCredits] = useState(null);
   const [notification, setNotification] = useState(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -457,8 +460,8 @@ function App() {
         // Clear localStorage if deleting the active sheet
         const storageKey = `lastActiveSheet_${user.uid}_${currentProjectId}`;
         localStorage.removeItem(storageKey);
-        setActiveSheet(remaining.length > 0 ? remaining[0] : null);
-      }
+      setActiveSheet(remaining.length > 0 ? remaining[0] : null);
+    }
       await loadSheets(user.uid, currentProjectId);
     } catch (error) {
     }
@@ -892,7 +895,7 @@ function App() {
             // Ensure x and y are numbers, not strings or undefined
             const cellToSave = { 
               ...latestCell, 
-              cell_id: cellId, 
+      cell_id: cellId,
               x: typeof x === 'number' ? x : parseFloat(x) || 0, 
               y: typeof y === 'number' ? y : parseFloat(y) || 0 
             };
@@ -1558,7 +1561,266 @@ function App() {
   };
 
   // Convert cells object to array for Canvas component
-  const cellsArray = Object.values(cells);
+  // Sort cells by cell_id (A1, A2, B1, B2, etc.)
+  const sortCellsByID = (cells) => {
+    return Object.values(cells).sort((a, b) => {
+      const idA = a.cell_id || '';
+      const idB = b.cell_id || '';
+      
+      // Extract column (letter) and row (number) from cell ID
+      const matchA = idA.match(/^([A-Z]+)(\d+)$/);
+      const matchB = idB.match(/^([A-Z]+)(\d+)$/);
+      
+      if (!matchA || !matchB) {
+        // If format doesn't match, sort alphabetically
+        return idA.localeCompare(idB);
+      }
+      
+      const colA = matchA[1];
+      const colB = matchB[1];
+      const rowA = parseInt(matchA[2], 10);
+      const rowB = parseInt(matchB[2], 10);
+      
+      // First compare by column (A, B, C, etc.)
+      if (colA !== colB) {
+        return colA.localeCompare(colB);
+      }
+      
+      // Then compare by row number
+      return rowA - rowB;
+    });
+  };
+
+  const cellsArray = sortCellsByID(cells);
+
+  const handleDownloadSheet = async (selectedGenerations = null) => {
+    if (!activeSheet || cellsArray.length === 0) {
+      alert('No cells to download. Add some cards to the sheet first.');
+      return;
+    }
+
+    // If no selections provided, show the selection modal
+    if (selectedGenerations === null) {
+      setShowGenerationSelect(true);
+      return;
+    }
+
+    try {
+      const doc = new jsPDF();
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const margin = 20;
+      const maxWidth = pageWidth - (margin * 2);
+      let yPos = margin;
+
+      // Helper function to add a new page if needed
+      const checkPageBreak = (requiredHeight) => {
+        if (yPos + requiredHeight > pageHeight - margin) {
+          doc.addPage();
+          yPos = margin;
+          return true;
+        }
+        return false;
+      };
+
+      // Helper function to add text with word wrap
+      const addText = (text, fontSize = 10, isBold = false, color = [0, 0, 0]) => {
+        doc.setFontSize(fontSize);
+        doc.setFont('helvetica', isBold ? 'bold' : 'normal');
+        doc.setTextColor(color[0], color[1], color[2]);
+        
+        const lines = doc.splitTextToSize(text, maxWidth);
+        const lineHeight = fontSize * 0.4;
+        
+        checkPageBreak(lines.length * lineHeight + 5);
+        
+        lines.forEach((line) => {
+          doc.text(line, margin, yPos);
+          yPos += lineHeight;
+        });
+        yPos += 5; // Add spacing after text
+      };
+
+      // Title
+      doc.setFontSize(20);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(0, 0, 0);
+      const sheetName = activeSheet.name || 'Sheet';
+      doc.text(sheetName, margin, yPos);
+      yPos += 10;
+
+      // Sheet info
+      addText(`Generated on ${new Date().toLocaleString()}`, 9, false, [100, 100, 100]);
+      addText(`Total Cards: ${cellsArray.length}`, 9, false, [100, 100, 100]);
+      yPos += 10;
+
+      // Process each cell in order, including only selected generations
+      let cellIndex = 0;
+      cellsArray.forEach((cell) => {
+        const cellSelections = selectedGenerations[cell.cell_id] || { currentOutput: false, generations: {} };
+        const hasCurrentOutput = cellSelections.currentOutput && cell.output && cell.output.trim() !== '';
+        const selectedGenIndices = cell.generations && Array.isArray(cell.generations)
+          ? Object.keys(cellSelections.generations || {})
+              .map(Number)
+              .filter(idx => cellSelections.generations[idx] && idx < cell.generations.length)
+              .sort((a, b) => a - b)
+          : [];
+        
+        // Skip cell if nothing is selected
+        if (!hasCurrentOutput && selectedGenIndices.length === 0) {
+          return;
+        }
+
+        checkPageBreak(30);
+        
+        // Cell separator
+        if (cellIndex > 0) {
+          yPos += 5;
+          doc.setDrawColor(200, 200, 200);
+          doc.line(margin, yPos, pageWidth - margin, yPos);
+          yPos += 10;
+        }
+        cellIndex++;
+
+        // Cell header
+        const cellTitle = cell.name || `Cell ${cell.cell_id}`;
+        addText(cellTitle, 14, true, [0, 0, 0]);
+        addText(`ID: ${cell.cell_id}`, 10, false, [100, 100, 100]);
+        yPos += 3;
+
+        // Prompt
+        if (cell.prompt) {
+          checkPageBreak(15);
+          addText('PROMPT', 11, true, [50, 50, 150]);
+          addText(cell.prompt, 10, false, [0, 0, 0]);
+          yPos += 3;
+        }
+
+        // Model and settings
+        checkPageBreak(15);
+        const modelName = availableModels.find(m => 
+          m.id === cell.model || 
+          m.originalId === cell.model ||
+          m.id === cell.model?.split('/')?.pop()
+        )?.name || cell.model || 'GPT-3.5';
+        
+        addText('SETTINGS', 11, true, [50, 50, 150]);
+        addText(`Model: ${modelName}`, 9, false, [0, 0, 0]);
+        if (cell.temperature !== undefined) {
+          addText(`Temperature: ${cell.temperature}`, 9, false, [0, 0, 0]);
+        }
+        if (cell.characterLimit) {
+          addText(`Character Limit: ${cell.characterLimit}`, 9, false, [0, 0, 0]);
+        }
+        if (cell.outputFormat) {
+          addText(`Output Format: ${cell.outputFormat}`, 9, false, [0, 0, 0]);
+        }
+        yPos += 3;
+
+        // Current output (if selected)
+        if (hasCurrentOutput) {
+          checkPageBreak(20);
+          addText('CURRENT OUTPUT', 11, true, [50, 50, 150]);
+          
+          // Check if output is a media URL
+          const isMediaUrl = cell.output.match(/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|mp4|webm|mov|mp3|wav|ogg)/i) || 
+                            cell.output.startsWith('data:');
+          
+          if (isMediaUrl) {
+            addText(`[Media URL: ${cell.output.substring(0, 100)}...]`, 10, false, [100, 100, 100]);
+          } else {
+            // Format text output (remove markdown formatting for cleaner PDF)
+            const cleanOutput = cell.output
+              .replace(/#{1,6}\s+/g, '') // Remove markdown headers
+              .replace(/\*\*(.+?)\*\*/g, '$1') // Remove bold
+              .replace(/\*(.+?)\*/g, '$1') // Remove italic
+              .replace(/`(.+?)`/g, '$1') // Remove code
+              .replace(/\[(.+?)\]\(.+?\)/g, '$1'); // Remove links
+            
+            addText(cleanOutput, 10, false, [0, 0, 0]);
+          }
+          yPos += 3;
+        }
+
+        // Selected generations only
+        if (selectedGenIndices.length > 0) {
+          checkPageBreak(15);
+          addText(`GENERATIONS (${selectedGenIndices.length} selected)`, 11, true, [150, 50, 50]);
+          
+          selectedGenIndices.forEach((genIndex, idx) => {
+            const gen = cell.generations[genIndex];
+            if (!gen) return;
+            
+            checkPageBreak(20);
+            
+            addText(`Generation ${genIndex + 1}`, 10, true, [100, 100, 100]);
+            
+            // Timestamp if available
+            if (gen.timestamp) {
+              let timestamp;
+              if (gen.timestamp.toDate) {
+                timestamp = gen.timestamp.toDate().toLocaleString();
+              } else if (gen.timestamp.seconds) {
+                timestamp = new Date(gen.timestamp.seconds * 1000).toLocaleString();
+              } else {
+                timestamp = new Date(gen.timestamp).toLocaleString();
+              }
+              addText(`Generated: ${timestamp}`, 8, false, [120, 120, 120]);
+            }
+            
+            // Output
+            if (gen.output) {
+              const isMediaUrl = gen.output.match(/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|mp4|webm|mov|mp3|wav|ogg)/i) || 
+                                gen.output.startsWith('data:');
+              
+              if (isMediaUrl) {
+                addText(`[Media URL: ${gen.output.substring(0, 80)}...]`, 9, false, [120, 120, 120]);
+              } else {
+                const cleanOutput = gen.output
+                  .replace(/#{1,6}\s+/g, '')
+                  .replace(/\*\*(.+?)\*\*/g, '$1')
+                  .replace(/\*(.+?)\*/g, '$1')
+                  .replace(/`(.+?)`/g, '$1')
+                  .replace(/\[(.+?)\]\(.+?\)/g, '$1');
+                
+                addText(cleanOutput, 9, false, [0, 0, 0]);
+              }
+            }
+            
+            if (idx < selectedGenIndices.length - 1) {
+              yPos += 2;
+              doc.setDrawColor(220, 220, 220);
+              doc.line(margin + 5, yPos, pageWidth - margin - 5, yPos);
+              yPos += 3;
+            }
+          });
+        }
+      });
+
+      // Footer
+      const totalPages = doc.internal.pages.length - 1;
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8);
+        doc.setTextColor(150, 150, 150);
+        doc.text(
+          `Page ${i} of ${totalPages} - ${sheetName} - Generated on ${new Date().toLocaleString()}`,
+          pageWidth / 2,
+          pageHeight - 10,
+          { align: 'center' }
+        );
+      }
+
+      // Save PDF
+      const fileName = `${sheetName.replace(/[^a-z0-9]/gi, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
+      doc.save(fileName);
+      
+      console.log('✅ Sheet PDF generated successfully');
+    } catch (error) {
+      console.error('❌ Error generating sheet PDF:', error);
+      alert(`Failed to generate PDF: ${error.message}`);
+    }
+  };
 
   // Show login screen if not authenticated
   if (loading) {
@@ -1669,6 +1931,15 @@ function App() {
             Add Card
           </button>
           <button
+            onClick={() => handleDownloadSheet()}
+            disabled={!activeSheet || cellsArray.length === 0}
+            className="px-5 py-2 bg-purple-600 hover:bg-purple-500 active:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition-all shadow-lg shadow-purple-900/20 flex items-center gap-2"
+            title="Download sheet as PDF"
+          >
+            <FileText size={16} />
+            Download Sheet
+          </button>
+          <button
             onClick={() => setShowTemplates(true)}
             className="px-5 py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 active:from-purple-700 active:to-pink-700 text-white rounded-lg text-sm font-semibold transition-all shadow-lg shadow-purple-900/20 flex items-center gap-2"
             title="Use a template"
@@ -1699,7 +1970,7 @@ function App() {
                   {user.displayName || user.email || 'User'}
                 </span>
                 <ChevronDown size={14} className="text-gray-400 hidden sm:block" />
-              </button>
+          </button>
               
               {/* User Menu Dropdown */}
               {showUserMenu && (
@@ -1887,7 +2158,7 @@ function App() {
                 autoFocus
               />
             ) : (
-              <span 
+              <span
                 className="font-medium"
                 onDoubleClick={(e) => {
                   e.stopPropagation();
@@ -1915,10 +2186,10 @@ function App() {
                 </button>
                 <button
                   className="hover:text-red-400 text-gray-500 p-0.5 rounded transition-colors"
-                  onClick={(e) => handleDeleteSheet(e, sheet.id)}
+                onClick={(e) => handleDeleteSheet(e, sheet.id)}
                   title="Delete sheet"
-                >
-                  <Trash2 size={12} />
+              >
+                <Trash2 size={12} />
                 </button>
               </>
             )}
@@ -1974,6 +2245,13 @@ function App() {
         onClose={() => setShowTemplates(false)}
         onSelectTemplate={applyTemplate}
         availableModels={availableModels}
+      />
+
+      <GenerationSelectModal
+        isOpen={showGenerationSelect}
+        onClose={() => setShowGenerationSelect(false)}
+        cells={cellsArray}
+        onDownload={handleDownloadSheet}
       />
 
       {/* Subscription Modal */}

@@ -16,6 +16,7 @@
     "firebase": "^12.6.0",
     "firebase-admin": "^13.6.0",
     "framer-motion": "^12.23.26",
+    "jspdf": "^3.0.4",
     "lucide-react": "^0.560.0",
     "openai": "^6.10.0",
     "react": "^19.2.0",

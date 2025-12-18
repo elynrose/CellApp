@@ -140,7 +140,8 @@ const ImageWithErrorHandling = ({ src, alt, className, draggable, ...props }) =>
     );
 };
 import { motion } from 'framer-motion';
-import { Play, Square, Trash2, GripHorizontal, Settings, Clock, Loader2, ChevronDown, ChevronUp, Unlink, Edit2, Check, X as XIcon, Copy, Maximize2, Download, ExternalLink, HelpCircle } from 'lucide-react';
+import { Play, Square, Trash2, GripHorizontal, Settings, Clock, Loader2, ChevronDown, ChevronUp, Unlink, Edit2, Check, X as XIcon, Copy, Maximize2, Download, ExternalLink, HelpCircle, FileText } from 'lucide-react';
+import jsPDF from 'jspdf';
 import SettingsModal from './SettingsModal';
 import HistoryModal from './HistoryModal';
 import { formatOutput } from '../services/cellExecution';
@@ -656,8 +657,8 @@ const Card = ({ cell, onUpdate, onPositionChange, onRunCell, onStopCell, onDelet
             };
             
             const statusMessage = getStatusMessage();
-            
-            return (
+
+    return (
                 <div className="flex flex-col items-center justify-center p-8 text-gray-400">
                     <Loader2 size={32} className="animate-spin mb-4 text-blue-400" />
                     <span className="text-sm font-medium">{statusMessage}</span>
@@ -836,10 +837,223 @@ const Card = ({ cell, onUpdate, onPositionChange, onRunCell, onStopCell, onDelet
     };
 
     const [isSaving, setIsSaving] = useState(false);
+    const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+
+    const handleDownloadPDF = async () => {
+        setIsGeneratingPDF(true);
+        try {
+            const doc = new jsPDF();
+            const pageWidth = doc.internal.pageSize.getWidth();
+            const pageHeight = doc.internal.pageSize.getHeight();
+            const margin = 20;
+            const maxWidth = pageWidth - (margin * 2);
+            let yPos = margin;
+
+            // Helper function to add a new page if needed
+            const checkPageBreak = (requiredHeight) => {
+                if (yPos + requiredHeight > pageHeight - margin) {
+                    doc.addPage();
+                    yPos = margin;
+                    return true;
+                }
+                return false;
+            };
+
+            // Helper function to add text with word wrap
+            const addText = (text, fontSize = 10, isBold = false, color = [0, 0, 0]) => {
+                doc.setFontSize(fontSize);
+                doc.setFont('helvetica', isBold ? 'bold' : 'normal');
+                doc.setTextColor(color[0], color[1], color[2]);
+                
+                const lines = doc.splitTextToSize(text, maxWidth);
+                const lineHeight = fontSize * 0.4;
+                
+                checkPageBreak(lines.length * lineHeight + 5);
+                
+                lines.forEach((line) => {
+                    doc.text(line, margin, yPos);
+                    yPos += lineHeight;
+                });
+                yPos += 5; // Add spacing after text
+            };
+
+            // Title
+            doc.setFontSize(18);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(0, 0, 0);
+            const title = cardName || `Cell ${cell.cell_id}`;
+            doc.text(title, margin, yPos);
+            yPos += 10;
+
+            // Cell ID
+            addText(`Cell ID: ${cell.cell_id}`, 10, false, [100, 100, 100]);
+            yPos += 3;
+
+            // Prompt section
+            if (cell.prompt) {
+                checkPageBreak(15);
+                addText('PROMPT', 12, true, [0, 0, 0]);
+                addText(cell.prompt, 10, false, [0, 0, 0]);
+                yPos += 5;
+            }
+
+            // Model and settings
+            checkPageBreak(15);
+            const modelName = availableModels.find(m => 
+                m.id === cell.model || 
+                m.originalId === cell.model ||
+                m.id === cell.model?.split('/')?.pop()
+            )?.name || cell.model || 'GPT-3.5';
+            
+            addText('MODEL & SETTINGS', 12, true, [0, 0, 0]);
+            addText(`Model: ${modelName}`, 10, false, [0, 0, 0]);
+            if (cell.temperature !== undefined) {
+                addText(`Temperature: ${cell.temperature}`, 10, false, [0, 0, 0]);
+            }
+            if (cell.characterLimit) {
+                addText(`Character Limit: ${cell.characterLimit}`, 10, false, [0, 0, 0]);
+            }
+            if (cell.outputFormat) {
+                addText(`Output Format: ${cell.outputFormat}`, 10, false, [0, 0, 0]);
+            }
+            yPos += 5;
+
+            // Current output
+            if (cell.output) {
+                checkPageBreak(20);
+                addText('CURRENT OUTPUT', 12, true, [0, 0, 0]);
+                
+                // Check if output is a media URL
+                const isMediaUrl = cell.output.match(/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|mp4|webm|mov|mp3|wav|ogg)/i) || 
+                                  cell.output.startsWith('data:');
+                
+                if (isMediaUrl) {
+                    addText(`[Media URL: ${cell.output.substring(0, 100)}...]`, 10, false, [100, 100, 100]);
+                } else {
+                    // Format text output (remove markdown formatting for cleaner PDF)
+                    const cleanOutput = cell.output
+                        .replace(/#{1,6}\s+/g, '') // Remove markdown headers
+                        .replace(/\*\*(.+?)\*\*/g, '$1') // Remove bold
+                        .replace(/\*(.+?)\*/g, '$1') // Remove italic
+                        .replace(/`(.+?)`/g, '$1') // Remove code
+                        .replace(/\[(.+?)\]\(.+?\)/g, '$1'); // Remove links
+                    
+                    addText(cleanOutput, 10, false, [0, 0, 0]);
+                }
+                yPos += 5;
+            }
+
+            // Generations
+            if (cell.generations && Array.isArray(cell.generations) && cell.generations.length > 0) {
+                checkPageBreak(20);
+                addText('GENERATION HISTORY', 12, true, [0, 0, 0]);
+                yPos += 3;
+
+                cell.generations.forEach((gen, index) => {
+                    checkPageBreak(25);
+                    
+                    // Generation header
+                    addText(`Generation ${index + 1}`, 11, true, [50, 50, 150]);
+                    
+                    // Timestamp if available
+                    if (gen.timestamp) {
+                        let timestamp;
+                        if (gen.timestamp.toDate) {
+                            timestamp = gen.timestamp.toDate().toLocaleString();
+                        } else if (gen.timestamp.seconds) {
+                            timestamp = new Date(gen.timestamp.seconds * 1000).toLocaleString();
+                        } else {
+                            timestamp = new Date(gen.timestamp).toLocaleString();
+                        }
+                        addText(`Generated: ${timestamp}`, 9, false, [100, 100, 100]);
+                    }
+                    
+                    // Status if available
+                    if (gen.status) {
+                        addText(`Status: ${gen.status}`, 9, false, [100, 100, 100]);
+                    }
+                    
+                    // Output
+                    if (gen.output) {
+                        const isMediaUrl = gen.output.match(/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|mp4|webm|mov|mp3|wav|ogg)/i) || 
+                                          gen.output.startsWith('data:');
+                        
+                        if (isMediaUrl) {
+                            addText(`[Media URL: ${gen.output.substring(0, 100)}...]`, 10, false, [100, 100, 100]);
+                        } else {
+                            // Format text output
+                            const cleanOutput = gen.output
+                                .replace(/#{1,6}\s+/g, '')
+                                .replace(/\*\*(.+?)\*\*/g, '$1')
+                                .replace(/\*(.+?)\*/g, '$1')
+                                .replace(/`(.+?)`/g, '$1')
+                                .replace(/\[(.+?)\]\(.+?\)/g, '$1');
+                            
+                            addText(cleanOutput, 10, false, [0, 0, 0]);
+                        }
+                    }
+                    
+                    // Add separator between generations
+                    if (index < cell.generations.length - 1) {
+                        yPos += 3;
+                        doc.setDrawColor(200, 200, 200);
+                        doc.line(margin, yPos, pageWidth - margin, yPos);
+                        yPos += 5;
+                    }
+                });
+            } else {
+                checkPageBreak(10);
+                addText('No generation history available', 10, false, [150, 150, 150]);
+            }
+
+            // Footer
+            const totalPages = doc.internal.pages.length - 1;
+            for (let i = 1; i <= totalPages; i++) {
+                doc.setPage(i);
+                doc.setFontSize(8);
+                doc.setTextColor(150, 150, 150);
+                doc.text(
+                    `Page ${i} of ${totalPages} - Generated on ${new Date().toLocaleString()}`,
+                    pageWidth / 2,
+                    pageHeight - 10,
+                    { align: 'center' }
+                );
+            }
+
+            // Save PDF
+            const fileName = `${cardName || cell.cell_id}_${new Date().toISOString().split('T')[0]}.pdf`;
+            doc.save(fileName);
+            
+            console.log('✅ PDF generated successfully');
+        } catch (error) {
+            console.error('❌ Error generating PDF:', error);
+            alert(`Failed to generate PDF: ${error.message}`);
+        } finally {
+            setIsGeneratingPDF(false);
+        }
+    };
 
     const handleSaveMedia = async () => {
         if (!userId || !projectId || !sheetId || !cell.cell_id) {
             console.error('Missing required IDs for saving media');
+            return;
+        }
+
+        // Check storage permissions before allowing save
+        const { checkStoragePermission, getStorageLimitMessage } = await import('../utils/storagePermissions');
+        const permission = await checkStoragePermission(userId);
+        
+        if (!permission.allowed) {
+            setIsSaving(false);
+            const message = permission.reason || 'Storage not available for your subscription plan';
+            const limitMessage = getStorageLimitMessage(permission.subscription || 'free');
+            
+            // Show detailed message for Free/Starter users with download advice
+            if (permission.subscription === 'free' || permission.subscription === 'starter') {
+                alert(`${message}\n\n${limitMessage}\n\nPlease download copies of your images and videos to save them locally.`);
+            } else {
+                alert(message);
+            }
             return;
         }
 
@@ -942,6 +1156,7 @@ const Card = ({ cell, onUpdate, onPositionChange, onRunCell, onStopCell, onDelet
                         console.log(`✅ Uploaded ${media.type} to Firebase: ${uploadResult.url.substring(0, 100)}...`);
                     } else {
                         const errorMsg = uploadResult?.error || 'Unknown error';
+                        const isBlocked = uploadResult?.blocked || false;
                         // Check for expired URL errors
                         const isExpiredError = errorMsg.includes('no longer available') || 
                                              errorMsg.includes('expire') || 
@@ -960,12 +1175,24 @@ const Card = ({ cell, onUpdate, onPositionChange, onRunCell, onStopCell, onDelet
                                 error: expiredMsg
                             });
                         } else {
-                            console.warn(`⚠️ Failed to upload ${media.type}:`, errorMsg);
-                            uploadResults.push({
-                                ...media,
-                                firebaseUrl: null,
-                                error: errorMsg
-                            });
+                            // Check if upload was blocked due to subscription
+                            if (isBlocked) {
+                                console.warn(`⚠️ Upload blocked for ${media.type}: ${errorMsg}`);
+                                uploadResults.push({
+                                    ...media,
+                                    firebaseUrl: null,
+                                    error: errorMsg,
+                                    blocked: true
+                                });
+                            } else {
+                                console.warn(`⚠️ Failed to upload ${media.type}:`, errorMsg);
+                                uploadResults.push({
+                                    ...media,
+                                    firebaseUrl: null,
+                                    error: errorMsg,
+                                    blocked: false
+                                });
+                            }
                         }
                     }
                 } catch (error) {
@@ -1042,28 +1269,47 @@ const Card = ({ cell, onUpdate, onPositionChange, onRunCell, onStopCell, onDelet
                     } else {
                         console.warn(`⚠️ onUpdate callback not provided`);
                     }
-                    alert(`Successfully saved ${successfulUploads.length} media file(s) to Firebase!`);
+                    const blockedCount = uploadResults.filter(r => r.blocked).length;
+                    let message = `Successfully saved ${successfulUploads.length} media file(s) to Firebase!`;
+                    if (blockedCount > 0) {
+                        message += `\n\n${blockedCount} file(s) could not be saved due to subscription limits. Please download copies of your media files.`;
+                    }
+                    alert(message);
                 } else {
                     console.error('❌ Failed to save cell:', saveResult.error);
                     alert(`Failed to save cell: ${saveResult.error || 'Unknown error'}`);
                 }
             } else {
                 const failedCount = uploadResults.filter(r => !r.firebaseUrl).length;
+                const blockedCount = uploadResults.filter(r => r.blocked).length;
                 const expiredCount = uploadResults.filter(r => !r.firebaseUrl && r.error && (r.error.includes('expired') || r.error.includes('no longer available'))).length;
                 
-                console.error(`❌ All uploads failed. Failed count: ${failedCount}, Expired: ${expiredCount}`);
+                console.error(`❌ All uploads failed. Failed count: ${failedCount}, Blocked: ${blockedCount}, Expired: ${expiredCount}`);
                 uploadResults.forEach((result, idx) => {
                     if (!result.firebaseUrl) {
-                        console.error(`❌ Upload ${idx} failed:`, result.error);
+                        console.error(`❌ Upload ${idx} failed:`, result.error, result.blocked ? '(BLOCKED)' : '');
                     }
                 });
                 
                 if (failedCount > 0) {
-                    if (expiredCount === failedCount && expiredCount > 0) {
+                    if (blockedCount === failedCount && blockedCount > 0) {
+                        // All failures are due to subscription limits
+                        const { getStorageLimitMessage } = await import('../utils/storagePermissions');
+                        const limitMessage = getStorageLimitMessage('free');
+                        alert(`Cannot save: ${blockedCount} media file(s) cannot be saved due to subscription limits.\n\n${limitMessage}\n\nPlease download copies of your media files.`);
+                    } else if (expiredCount === failedCount && expiredCount > 0) {
                         // All failures are due to expired URLs
                         alert(`Cannot save: ${expiredCount} media file(s) have expired URLs. ${expiredCount === 1 ? 'It' : 'They'} must be saved within 1 hour of generation. Please regenerate ${expiredCount === 1 ? 'it' : 'them'} or ensure future generations are saved immediately.`);
                     } else {
-                        alert(`Failed to upload ${failedCount} media file(s). ${expiredCount > 0 ? `${expiredCount} expired. ` : ''}Check console for details.`);
+                        let message = `Failed to upload ${failedCount} media file(s).`;
+                        if (blockedCount > 0) {
+                            message += ` ${blockedCount} blocked due to subscription limits.`;
+                        }
+                        if (expiredCount > 0) {
+                            message += ` ${expiredCount} expired.`;
+                        }
+                        message += ' Check console for details.';
+                        alert(message);
                     }
                 }
             }
@@ -1147,7 +1393,7 @@ const Card = ({ cell, onUpdate, onPositionChange, onRunCell, onStopCell, onDelet
                                         title="Cell reference (cannot be changed)"
                                     >
                                         {cell.cell_id}
-                                    </span>
+                            </span>
                                     {/* Cross-sheet reference indicator */}
                                     {(() => {
                                         const crossSheetRef = isReferencedFromOtherSheet();
@@ -1281,6 +1527,23 @@ const Card = ({ cell, onUpdate, onPositionChange, onRunCell, onStopCell, onDelet
                             <button
                                 type="button"
                                 className={`transition-colors ${
+                                    isGeneratingPDF 
+                                        ? 'text-blue-400 cursor-wait' 
+                                        : 'text-gray-400 hover:text-purple-400'
+                                }`}
+                                title="Download PDF of all generations"
+                                disabled={isGeneratingPDF}
+                                onMouseDown={(e) => e.stopPropagation()}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDownloadPDF();
+                                }}
+                            >
+                                {isGeneratingPDF ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
+                            </button>
+                            <button
+                                type="button"
+                                className={`transition-colors ${
                                     isSaving 
                                         ? 'text-blue-400 cursor-wait' 
                                         : 'text-gray-400 hover:text-green-400'
@@ -1379,12 +1642,12 @@ const Card = ({ cell, onUpdate, onPositionChange, onRunCell, onStopCell, onDelet
                                             <HelpCircle size={14} />
                                         </button>
                                     </div>
-                                    <textarea
+                            <textarea
                                         className="w-full text-sm text-gray-200 placeholder-gray-600 focus:outline-none resize-none bg-transparent font-medium leading-relaxed flex-1 min-h-0"
                                         placeholder="What would you like to create? Use {{A1}} for same-sheet, {{Sheet1!A1}} for cross-sheet references"
                                         rows={(!output || !isOutputCollapsed) ? undefined : 2}
                                     style={(!output || !isOutputCollapsed) ? { height: '100%' } : {}}
-                                    value={prompt}
+                                value={prompt}
                                 onChange={(e) => {
                                     const newPrompt = e.target.value;
                                     setPrompt(newPrompt);
@@ -1411,8 +1674,8 @@ const Card = ({ cell, onUpdate, onPositionChange, onRunCell, onStopCell, onDelet
                                 onTouchStart={(e) => {
                                     e.stopPropagation();
                                 }}
-                                />
-                                </div>
+                            />
+                        </div>
                             </div>
                         </div>
                         {/* Output Section - Collapsible */}
@@ -1461,8 +1724,8 @@ const Card = ({ cell, onUpdate, onPositionChange, onRunCell, onStopCell, onDelet
                                 </div>
                                 {!isOutputCollapsed && (
                                     <div className="p-4 bg-black/10 flex-1 min-h-0 rounded-b-2xl relative overflow-auto">
-                                        {renderContent()}
-                                    </div>
+                            {renderContent()}
+                        </div>
                                 )}
                             </div>
                         )}
@@ -1521,7 +1784,7 @@ const Card = ({ cell, onUpdate, onPositionChange, onRunCell, onStopCell, onDelet
                         title="Resize both"
                     >
                         <Maximize2 size={14} className="text-gray-500 opacity-50 hover:opacity-100 transition-opacity" style={{ transform: 'rotate(90deg)' }} />
-                    </div>
+                </div>
                 </div>
             {/* Settings Modal */}
             <SettingsModal

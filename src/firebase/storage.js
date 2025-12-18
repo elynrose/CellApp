@@ -1,6 +1,7 @@
 // Firebase Storage Service for uploading and managing images
 import { ref, uploadBytes, getDownloadURL, deleteObject, listAll } from 'firebase/storage';
 import { storage, auth } from './config';
+import { checkStoragePermission, getStorageLimitMessage } from '../utils/storagePermissions';
 
 /**
  * Upload profile photo
@@ -28,6 +29,7 @@ export async function uploadProfilePhoto(file, userId) {
 export async function uploadImageFromUrl(imageUrl, userId, projectId, sheetId, cellId) {
   try {
     console.log(`📸 Starting image upload from URL: ${imageUrl.substring(0, 100)}...`);
+    
     // Use proxy endpoint to bypass CORS (especially for Azure blob storage)
     const proxyResponse = await fetch('/api/proxy-image', {
       method: 'POST',
@@ -66,6 +68,19 @@ export async function uploadImageFromUrl(imageUrl, userId, projectId, sheetId, c
     // Convert data URL to blob
     const response = await fetch(proxyData.dataUrl);
     const blob = await response.blob();
+    
+    // Check storage permissions with file size
+    const permission = await checkStoragePermission(userId, blob.size);
+    if (!permission.allowed) {
+      const message = permission.reason || 'Storage not available for your subscription plan';
+      console.warn(`❌ Storage upload blocked: ${message}`);
+      return { 
+        success: false, 
+        error: message,
+        blocked: true,
+        subscription: permission.subscription
+      };
+    }
     
     // Determine file extension from URL or blob type
     let extension = 'jpg';
@@ -130,6 +145,19 @@ export async function uploadVideoFromUrl(videoUrl, userId, projectId, sheetId, c
     }
     
     console.log(`✅ User authenticated: ${currentUser.uid}`);
+    
+    // Check storage permissions based on subscription
+    const permission = await checkStoragePermission(userId);
+    if (!permission.allowed) {
+      const message = permission.reason || 'Storage not available for your subscription plan';
+      console.warn(`❌ Storage upload blocked: ${message}`);
+      return { 
+        success: false, 
+        error: message,
+        blocked: true,
+        subscription: permission.subscription
+      };
+    }
     
     // Use server-side upload endpoint (streams directly from OpenAI to Firebase, no base64 conversion)
     console.log(`📡 Uploading video via server-side endpoint (streaming, no base64 conversion)...`);
@@ -232,6 +260,19 @@ export async function uploadAudioFromUrl(audioUrl, userId, projectId, sheetId, c
       // Convert data URL to blob
       const response = await fetch(audioUrl);
       blob = await response.blob();
+      
+      // Check storage permissions with file size
+      const permission = await checkStoragePermission(userId, blob.size);
+      if (!permission.allowed) {
+        const message = permission.reason || 'Storage not available for your subscription plan';
+        console.warn(`❌ Storage upload blocked: ${message}`);
+        return { 
+          success: false, 
+          error: message,
+          blocked: true,
+          subscription: permission.subscription
+        };
+      }
     } else {
       // Handle regular URLs - use proxy endpoint to bypass CORS
       console.log(`📢 Starting audio upload from URL: ${audioUrl.substring(0, 100)}...`);
@@ -271,6 +312,19 @@ export async function uploadAudioFromUrl(audioUrl, userId, projectId, sheetId, c
       // Convert data URL to blob
       const response = await fetch(proxyData.dataUrl);
       blob = await response.blob();
+      
+      // Check storage permissions with file size
+      const permission = await checkStoragePermission(userId, blob.size);
+      if (!permission.allowed) {
+        const message = permission.reason || 'Storage not available for your subscription plan';
+        console.warn(`❌ Storage upload blocked: ${message}`);
+        return { 
+          success: false, 
+          error: message,
+          blocked: true,
+          subscription: permission.subscription
+        };
+      }
     }
     
     // Determine file extension from URL or blob type

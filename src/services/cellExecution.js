@@ -825,9 +825,16 @@ export async function runCell({
                 console.log(`✅ Image auto-uploaded to Firebase Storage: ${output.substring(0, 100)}...`);
                 if (onProgress) onProgress({ status: 'uploaded', cellId });
             } else {
-                console.error('❌ Failed to auto-upload image to Firebase Storage:', uploadResult.error);
-                console.warn('⚠️ Cell will be saved with original URL. Use save icon to retry upload.');
-                // Continue with original URL if upload fails - user can use save icon as backup
+                // Check if upload was blocked due to subscription
+                if (uploadResult.blocked) {
+                    console.warn(`⚠️ Image upload blocked: ${uploadResult.error}`);
+                    console.warn('⚠️ Free/Starter users cannot save to Firebase Storage. Please download copies of your images.');
+                    // Continue with original URL - user should download it
+                } else {
+                    console.error('❌ Failed to auto-upload image to Firebase Storage:', uploadResult.error);
+                    console.warn('⚠️ Cell will be saved with original URL. Use save icon to retry upload.');
+                }
+                // Continue with original URL if upload fails or is blocked
             }
         }
     } else if (modelType === 'video' && output && typeof output === 'string' && output.startsWith('http')) {
@@ -856,9 +863,17 @@ export async function runCell({
                 console.log(`✅ Video auto-uploaded to Firebase Storage: ${output.substring(0, 100)}...`);
                 if (onProgress) onProgress({ status: 'uploaded', cellId });
             } else {
-                console.error('❌ Failed to auto-upload video to Firebase Storage:', uploadResult.error);
-                console.warn('⚠️ Cell will be saved with original URL. Use save icon to retry upload.');
-                // Continue with original URL if upload fails - user can use save icon as backup
+                // Check if upload was blocked due to subscription
+                if (uploadResult.blocked) {
+                    console.warn(`⚠️ Video upload blocked: ${uploadResult.error}`);
+                    console.warn('⚠️ Free/Starter users cannot save to Firebase Storage. Please download copies of your videos.');
+                    console.warn('⚠️ NOTE: OpenAI video URLs expire after 1 hour. Download immediately!');
+                    // Continue with original URL - user should download it immediately
+                } else {
+                    console.error('❌ Failed to auto-upload video to Firebase Storage:', uploadResult.error);
+                    console.warn('⚠️ Cell will be saved with original URL. Use save icon to retry upload.');
+                }
+                // Continue with original URL if upload fails or is blocked
             }
         }
     } else if (modelType === 'audio' && output && (output.match(/^https?:\/\/.+\.(mp3|wav|ogg)/i) || output.startsWith('data:audio'))) {
@@ -872,9 +887,16 @@ export async function runCell({
                 console.log(`✅ Audio auto-uploaded to Firebase Storage: ${output.substring(0, 100)}...`);
                 if (onProgress) onProgress({ status: 'uploaded', cellId });
             } else {
-                console.error('❌ Failed to auto-upload audio to Firebase Storage:', uploadResult.error);
-                console.warn('⚠️ Cell will be saved with original URL. Use save icon to retry upload.');
-                // Continue with original URL if upload fails - user can use save icon as backup
+                // Check if upload was blocked due to subscription
+                if (uploadResult.blocked) {
+                    console.warn(`⚠️ Audio upload blocked: ${uploadResult.error}`);
+                    console.warn('⚠️ Free/Starter users cannot save to Firebase Storage. Please download copies of your audio files.');
+                    // Continue with original URL - user should download it
+                } else {
+                    console.error('❌ Failed to auto-upload audio to Firebase Storage:', uploadResult.error);
+                    console.warn('⚠️ Cell will be saved with original URL. Use save icon to retry upload.');
+                }
+                // Continue with original URL if upload fails or is blocked
             }
         }
     }

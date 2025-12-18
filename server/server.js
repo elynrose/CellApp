@@ -2871,6 +2871,40 @@ window.storage = storage;`;
 
           console.log(`📹 Server-side video upload: ${videoUrl.substring(0, 100)}...`);
 
+          // Check storage permissions based on subscription
+          if (userId) {
+            try {
+              const firestoreInstance = await initializeFirebase();
+              if (firestoreInstance) {
+                const userDoc = await firestoreInstance.collection('users').doc(userId).get();
+                if (userDoc.exists) {
+                  const userData = userDoc.data();
+                  const subscription = userData.subscription || 'free';
+                  
+                  // Free and Starter users cannot save to storage
+                  if (subscription === 'free' || subscription === 'starter') {
+                    res.statusCode = 403;
+                    res.setHeader('Content-Type', 'application/json');
+                    res.setHeader('Access-Control-Allow-Origin', '*');
+                    res.end(JSON.stringify({ 
+                      success: false,
+                      error: 'Storage not available on Free/Starter plan. Please download copies of your videos.',
+                      blocked: true,
+                      subscription
+                    }));
+                    return;
+                  }
+                  
+                  // Pro users have 5GB limit (check would go here if we track usage)
+                  // Enterprise has unlimited
+                  console.log(`✅ Storage permission granted for ${subscription} subscription`);
+                }
+              }
+            } catch (storageCheckError) {
+              console.warn('⚠️ Could not verify storage permissions, proceeding with upload:', storageCheckError.message);
+            }
+          }
+
           // Get OpenAI API key
           let openaiApiKey = process.env.OPENAI_API_KEY;
           if (userId) {
