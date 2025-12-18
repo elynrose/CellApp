@@ -65,10 +65,11 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
     
-    // Templates collection - all authenticated users can read, only admins can write
+    // Templates collection - all authenticated users can read and create, admins can update/delete
     match /templates/{templateId} {
       allow read: if isAuthenticated();
-      allow create, update, delete: if isAdmin();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
     }
     
     // Admin configuration
