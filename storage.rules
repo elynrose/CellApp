@@ -1,0 +1,51 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Images: images/{userId}/{projectId}/{sheetId}/{cellId}/{fileName}
+    match /images/{userId}/{projectId}/{sheetId}/{cellId}/{fileName} {
+      // Allow public read (download URLs from getDownloadURL include tokens for security)
+      // This is needed because video/img elements can't send Firebase auth headers
+      allow read: if true;
+      allow write: if isAuthenticated() && request.auth.uid == userId;
+      allow delete: if isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Videos: videos/{userId}/{projectId}/{sheetId}/{cellId}/{fileName}
+    match /videos/{userId}/{projectId}/{sheetId}/{cellId}/{fileName} {
+      // Allow public read (download URLs from getDownloadURL include tokens for security)
+      // This is needed because video/img elements can't send Firebase auth headers
+      allow read: if true;
+      allow write: if isAuthenticated() && request.auth.uid == userId;
+      allow delete: if isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Audio: audio/{userId}/{projectId}/{sheetId}/{cellId}/{fileName}
+    match /audio/{userId}/{projectId}/{sheetId}/{cellId}/{fileName} {
+      // Allow public read (download URLs from getDownloadURL include tokens for security)
+      // This is needed because video/img elements can't send Firebase auth headers
+      allow read: if true;
+      allow write: if isAuthenticated() && request.auth.uid == userId;
+      allow delete: if isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Profile photos: users/{userId}/profile/{fileName}
+    match /users/{userId}/profile/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && request.auth.uid == userId;
+      allow delete: if isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Deny all other paths
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
+
+

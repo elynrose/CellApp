@@ -1,0 +1,86 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper function to check if user is admin
+    function isAdmin() {
+      return isAuthenticated() && 
+             (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true ||
+              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+    }
+    
+    // Helper function to check if user owns the resource
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Users collection with nested projects, sheets, cells, and generations
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update, delete: if isOwner(userId) || isAdmin();
+      // Projects subcollection
+      match /projects/{projectId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated();
+        allow update, delete: if isAuthenticated();
+        
+        // Sheets subcollection
+        match /sheets/{sheetId} {
+          allow read: if isAuthenticated();
+          allow create: if isAuthenticated();
+          allow update, delete: if isAuthenticated();
+          
+          // Cells subcollection
+          match /cells/{cellId} {
+            allow read: if isAuthenticated();
+            allow create: if isAuthenticated();
+            allow update, delete: if isAuthenticated();
+            
+            // Generations subcollection (nested under cells)
+            match /generations/{generationId} {
+              allow read: if isAuthenticated();
+              allow create: if isAuthenticated();
+              allow update, delete: if isAuthenticated();
+            }
+          }
+        }
+      }
+    }
+    
+    // Packages collection - only admins can write, all authenticated users can read
+    match /packages/{packageId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+    
+    // Models collection
+    match /models/{modelId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+    
+    // Templates collection - all authenticated users can read and create, admins can update/delete
+    match /templates/{templateId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+    
+    // Admin configuration
+    match /admin/{configKey} {
+      allow read, write: if isAdmin();
+    }
+    
+    // Deny all other collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+
