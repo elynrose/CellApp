@@ -592,6 +592,7 @@ async function makeAPIRequest(provider, endpoint, data = null, apiKey = null) {
     
     const url = new URL(fullUrl);
     console.log(`🌐 Making API request to: ${url.toString()}`);
+    console.log(`🔍 URL breakdown - Protocol: ${url.protocol}, Host: ${url.host}, Path: ${url.pathname}`);
     console.log(`🔑 Using API key: ${finalApiKey ? finalApiKey.substring(0, 10) + '...' : 'NOT SET'}`);
 
     // Check if this is a TTS request (audio endpoint)
