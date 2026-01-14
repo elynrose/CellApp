@@ -493,8 +493,17 @@ export async function getAllUsers() {
  */
 export async function updateUser(userId, userData) {
   try {
+    // SECURITY: Never allow role/isAdmin (or related) changes from client-side code.
+    // Admin privileges must be granted only via trusted server-side tooling.
+    const {
+      role,
+      isAdmin,
+      adminGrantedAt,
+      ...safeUserData
+    } = userData || {};
+
     await updateDoc(doc(db, 'users', userId), {
-      ...userData,
+      ...safeUserData,
       updatedAt: serverTimestamp()
     });
     return { success: true };

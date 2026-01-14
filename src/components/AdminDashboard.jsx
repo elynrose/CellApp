@@ -2771,7 +2771,6 @@ const UserModal = ({ user, onClose, onSave }) => {
   const [formData, setFormData] = useState({
     email: user?.email || '',
     displayName: user?.displayName || '',
-    role: user?.role || 'user',
     subscription: user?.subscription || 'free',
     isActive: user?.isActive !== false
   });
@@ -2819,15 +2818,18 @@ const UserModal = ({ user, onClose, onSave }) => {
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Role</label>
-            <select
-              value={formData.role}
-              onChange={(e) => setFormData(prev => ({ ...prev, role: e.target.value }))}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-            >
-              <option value="user">User</option>
-              <option value="admin">Admin</option>
-            </select>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Role (read-only)
+            </label>
+            <input
+              type="text"
+              value={user?.role || 'user'}
+              disabled
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white opacity-80 cursor-not-allowed"
+            />
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              For security, roles/admin access cannot be changed from the client UI.
+            </p>
           </div>
           
           <div>
