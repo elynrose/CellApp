@@ -1529,6 +1529,198 @@ window.storage = storage;`;
       return;
     }
 
+    // Main LLM endpoint - check early to avoid conflicts with other routes
+    if (req.method === 'POST' && urlPath === '/api/llm') {
+      console.log(`✅ Matched /api/llm endpoint`);
+      let body = '';
+      req.on('data', chunk => {
+        body += chunk;
+        // Avoid overly large request bodies
+        if (body.length > 1e7) req.connection.destroy();
+      });
+      req.on('end', async () => {
+        try {
+          // Circuit breaker - prevent multiple concurrent API requests
+          if (apiRequestInProgress) {
+            console.log(`🚫 API request already in progress, rejecting new request`);
+            res.statusCode = 429;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ error: 'API request already in progress. Please wait.' }));
+            return;
+          }
+
+          apiRequestInProgress = true;
+          console.log(`🔒 Circuit breaker: API request started`);
+
+          // Parse request body
+          let data;
+          try {
+            data = JSON.parse(body || '{}');
+          } catch (parseError) {
+            res.statusCode = 400;
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.end(JSON.stringify({ error: 'Invalid JSON in request body', details: parseError.message }));
+            apiRequestInProgress = false;
+            return;
+          }
+
+          const prompt = data.prompt || '';
+          const model = data.model || 'gpt-3.5-turbo';
+          const temperature = data.temperature || 0.7;
+          const maxTokens = data.max_tokens || data.maxTokens || undefined;
+          const userId = data.userId || null;
+          console.log(`📥 Raw request body (first 500 chars):`, body.substring(0, 500));
+          
+          // Debug: Log what we received AFTER parsing
+          console.log(`📥 Received video settings from frontend (after JSON.parse):`, {
+            videoSeconds: data.videoSeconds,
+            videoSecondsType: typeof data.videoSeconds,
+            videoResolution: data.videoResolution,
+            videoAspectRatio: data.videoAspectRatio
+          });
+          
+          // CRITICAL: Convert to string IMMEDIATELY after parsing JSON
+          let videoSettings = undefined;
+          if (data.videoSeconds || data.videoResolution || data.videoAspectRatio) {
+            const rawSeconds = data.videoSeconds;
+            console.log(`🔍 Raw seconds value: ${rawSeconds}, type: ${typeof rawSeconds}`);
+            
+            if (typeof rawSeconds === 'number') {
+              console.error(`❌❌❌ BUG DETECTED: videoSeconds is a NUMBER after JSON.parse!`);
+            }
+            
+            const secondsStr = String(rawSeconds || '8');
+            const validSeconds = ['4', '8', '12'];
+            const finalSeconds = validSeconds.includes(secondsStr) ? secondsStr : '8';
+            
+            console.log(`✅ Converted to string: "${finalSeconds}" (type: ${typeof finalSeconds})`);
+            
+            videoSettings = {
+              seconds: finalSeconds,
+              resolution: data.videoResolution || '720p',
+              aspectRatio: data.videoAspectRatio || '9:16'
+            };
+            
+            console.log(`📤 Video settings being passed to callHybridAI:`, {
+              seconds: videoSettings.seconds,
+              secondsType: typeof videoSettings.seconds,
+              resolution: videoSettings.resolution,
+              aspectRatio: videoSettings.aspectRatio
+            });
+          }
+
+          // Extract audio settings if provided
+          let audioSettings = undefined;
+          if (data.audioVoice || data.audioSpeed !== undefined || data.audioFormat) {
+            audioSettings = {
+              voice: data.audioVoice || 'alloy',
+              speed: data.audioSpeed ?? 1.0,
+              format: data.audioFormat || 'mp3'
+            };
+            console.log(`🎵 Audio settings being passed to callHybridAI:`, audioSettings);
+          }
+
+          // Validate required fields
+          if (!prompt || prompt.trim() === '') {
+            res.statusCode = 400;
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.end(JSON.stringify({ error: 'Prompt is required' }));
+            apiRequestInProgress = false;
+            return;
+          }
+
+          console.log(`🚀 API Request - Model: ${model}, Prompt: ${prompt.substring(0, 50)}..., MaxTokens: ${maxTokens || 'default'}, VideoSettings: ${videoSettings ? JSON.stringify(videoSettings) : 'none'}, AudioSettings: ${audioSettings ? JSON.stringify(audioSettings) : 'none'}, UserId: ${userId || 'none'}`);
+
+          // Call AI API (OpenAI and Gemini) - pass userId to use user's API key if available
+          const response = await callHybridAI(model, prompt, temperature, maxTokens, videoSettings, audioSettings, userId);
+
+          // Check if response is a job object (for async operations like video generation)
+          if (response && typeof response === 'object' && response.jobId) {
+            console.log(`✅ Job created - JobId: ${response.jobId}, Status: ${response.status}`);
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.end(JSON.stringify({ 
+              jobId: response.jobId,
+              status: response.status,
+              type: response.type || 'video'
+            }));
+          } else {
+            // Regular text/image/audio response
+            let responseText;
+            if (typeof response === 'string') {
+              responseText = response;
+            } else if (response && typeof response === 'object' && response.text) {
+              responseText = response.text;
+            } else if (response && typeof response === 'object' && response.output) {
+              responseText = response.output;
+            } else {
+              responseText = typeof response === 'object' ? JSON.stringify(response) : String(response);
+            }
+            
+            console.log(`✅ AI Generation Success - Response: ${responseText.substring(0, 100)}...`);
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.end(JSON.stringify({ text: responseText }));
+          }
+
+          // Reset circuit breaker on success
+          apiRequestInProgress = false;
+          console.log(`🔓 Circuit breaker: API request completed successfully`);
+        } catch (err) {
+          console.log(`❌ AI Generation Error:`, err.message);
+          console.log(`❌ Error Stack:`, err.stack);
+
+          // Reset circuit breaker on error
+          apiRequestInProgress = false;
+          console.log(`🔓 Circuit breaker: API request failed, resetting`);
+
+          // Handle different types of errors gracefully
+          let errorMessage = err.message || 'An error occurred while processing your request';
+          let statusCode = 500;
+
+          // Check for JSON parsing errors first
+          if (err instanceof SyntaxError && err.message.includes('JSON')) {
+            errorMessage = 'Invalid request format. Please check your request data.';
+            statusCode = 400;
+          } else if (err.message.includes('Image URL is required') || err.message.includes('image-to-video')) {
+            errorMessage = err.message;
+            statusCode = 400;
+          } else if (err.message.includes('API key') || err.message.includes('API configuration')) {
+            if (err.message.includes('OpenAI')) {
+              errorMessage = 'OpenAI API key is required. Please configure OPENAI_API_KEY in your .env file or Railway environment variables.';
+            } else if (err.message.includes('Gemini')) {
+              errorMessage = 'Gemini API key is required. Please configure GEMINI_API_KEY in your .env file or Railway environment variables.';
+            } else {
+              errorMessage = 'API configuration error. Please check your API keys in .env file or Railway environment variables.';
+            }
+            statusCode = 400;
+          } else if (err.message.includes('rate limit') || err.message.includes('429')) {
+            errorMessage = 'Rate limit exceeded. Please try again later.';
+            statusCode = 429;
+          } else if (err.message.includes('authentication') || err.message.includes('401')) {
+            errorMessage = 'Authentication failed. Please check your API keys.';
+            statusCode = 401;
+          } else if (err.message.includes('not found') || err.message.includes('404')) {
+            errorMessage = err.message;
+            statusCode = 404;
+          } else if (err.message.includes('timeout') || err.message.includes('timed out')) {
+            errorMessage = err.message;
+            statusCode = 408;
+          }
+
+          res.statusCode = statusCode;
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.end(JSON.stringify({ error: errorMessage, details: process.env.NODE_ENV === 'development' ? err.message : undefined }));
+        }
+      });
+      return;
+    }
+
     // Diagnostic endpoint for Firebase models
     if (req.url === '/api/models/diagnose') {
       try {
@@ -2345,210 +2537,7 @@ window.storage = storage;`;
       return;
     }
 
-    if (req.method === 'POST' && urlPath === '/api/llm') {
-      console.log(`✅ Matched /api/llm endpoint`);
-      let body = '';
-      req.on('data', chunk => {
-        body += chunk;
-        // Avoid overly large request bodies
-        if (body.length > 1e7) req.connection.destroy();
-      });
-      req.on('end', async () => {
-        try {
-          // Circuit breaker - prevent multiple concurrent API requests
-          if (apiRequestInProgress) {
-            console.log(`🚫 API request already in progress, rejecting new request`);
-            res.statusCode = 429;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ error: 'API request already in progress. Please wait.' }));
-            return;
-          }
-
-          apiRequestInProgress = true;
-          console.log(`🔒 Circuit breaker: API request started`);
-
-          // Parse request body
-          let data;
-          try {
-            data = JSON.parse(body || '{}');
-          } catch (parseError) {
-            res.statusCode = 400;
-            res.setHeader('Content-Type', 'application/json');
-            res.setHeader('Access-Control-Allow-Origin', '*');
-            res.end(JSON.stringify({ error: 'Invalid JSON in request body', details: parseError.message }));
-            apiRequestInProgress = false;
-            return;
-          }
-
-          const prompt = data.prompt || '';
-          const model = data.model || 'gpt-3.5-turbo';
-          const temperature = data.temperature || 0.7;
-          const maxTokens = data.max_tokens || data.maxTokens || undefined;
-          const userId = data.userId || null;
-          // CRITICAL: Check the raw body string BEFORE parsing to see if seconds is quoted
-          console.log(`📥 Raw request body (first 500 chars):`, body.substring(0, 500));
-          
-          // Debug: Log what we received AFTER parsing
-          console.log(`📥 Received video settings from frontend (after JSON.parse):`, {
-            videoSeconds: data.videoSeconds,
-            videoSecondsType: typeof data.videoSeconds,
-            videoResolution: data.videoResolution,
-            videoAspectRatio: data.videoAspectRatio
-          });
-          
-          // CRITICAL: Convert to string IMMEDIATELY after parsing JSON
-          // JSON.parse can convert string numbers to actual numbers, so we need to force it back to string
-          let videoSettings = undefined;
-          if (data.videoSeconds || data.videoResolution || data.videoAspectRatio) {
-            // Get the raw value and convert to string
-            const rawSeconds = data.videoSeconds;
-            console.log(`🔍 Raw seconds value: ${rawSeconds}, type: ${typeof rawSeconds}`);
-            
-            // CRITICAL: If it's a number, this is the bug! Convert it immediately
-            if (typeof rawSeconds === 'number') {
-              console.error(`❌❌❌ BUG DETECTED: videoSeconds is a NUMBER after JSON.parse!`);
-              console.error(`   This means the JSON body had "videoSeconds":4 instead of "videoSeconds":"4"`);
-              console.error(`   Raw body snippet: ${body.includes('videoSeconds') ? body.substring(body.indexOf('videoSeconds') - 10, body.indexOf('videoSeconds') + 30) : 'not found'}`);
-            }
-            
-            // Convert to string and validate
-            const secondsStr = String(rawSeconds || '8');
-            const validSeconds = ['4', '8', '12'];
-            const finalSeconds = validSeconds.includes(secondsStr) ? secondsStr : '8';
-            
-            console.log(`✅ Converted to string: "${finalSeconds}" (type: ${typeof finalSeconds})`);
-            
-            videoSettings = {
-              seconds: finalSeconds, // Already a string
-              resolution: data.videoResolution || '720p',
-              aspectRatio: data.videoAspectRatio || '9:16'
-            };
-            
-            // Debug: Log what we're passing to callHybridAI
-            console.log(`📤 Video settings being passed to callHybridAI:`, {
-              seconds: videoSettings.seconds,
-              secondsType: typeof videoSettings.seconds,
-              resolution: videoSettings.resolution,
-              aspectRatio: videoSettings.aspectRatio
-            });
-          }
-
-          // Extract audio settings if provided
-          let audioSettings = undefined;
-          if (data.audioVoice || data.audioSpeed !== undefined || data.audioFormat) {
-            audioSettings = {
-              voice: data.audioVoice || 'alloy',
-              speed: data.audioSpeed ?? 1.0,
-              format: data.audioFormat || 'mp3'
-            };
-            console.log(`🎵 Audio settings being passed to callHybridAI:`, audioSettings);
-          }
-
-          // Validate required fields
-          if (!prompt || prompt.trim() === '') {
-            res.statusCode = 400;
-            res.setHeader('Content-Type', 'application/json');
-            res.setHeader('Access-Control-Allow-Origin', '*');
-            res.end(JSON.stringify({ error: 'Prompt is required' }));
-            apiRequestInProgress = false;
-            return;
-          }
-
-          console.log(`🚀 API Request - Model: ${model}, Prompt: ${prompt.substring(0, 50)}..., MaxTokens: ${maxTokens || 'default'}, VideoSettings: ${videoSettings ? JSON.stringify(videoSettings) : 'none'}, AudioSettings: ${audioSettings ? JSON.stringify(audioSettings) : 'none'}, UserId: ${userId || 'none'}`);
-
-          // Call AI API (OpenAI and Gemini) - pass userId to use user's API key if available
-          const response = await callHybridAI(model, prompt, temperature, maxTokens, videoSettings, audioSettings, userId);
-
-          // Check if response is a job object (for async operations like video generation)
-          if (response && typeof response === 'object' && response.jobId) {
-            console.log(`✅ Job created - JobId: ${response.jobId}, Status: ${response.status}`);
-            res.statusCode = 200;
-            res.setHeader('Content-Type', 'application/json');
-            res.setHeader('Access-Control-Allow-Origin', '*');
-            res.end(JSON.stringify({ 
-              jobId: response.jobId,
-              status: response.status,
-              type: response.type || 'video'
-            }));
-          } else {
-            // Regular text/image/audio response
-            // Extract text from response object if it exists, otherwise use the response directly
-            let responseText;
-            if (typeof response === 'string') {
-              responseText = response;
-            } else if (response && typeof response === 'object' && response.text) {
-              // Response is an object with a text property
-              responseText = response.text;
-            } else if (response && typeof response === 'object' && response.output) {
-              // Response is an object with an output property
-              responseText = response.output;
-            } else {
-              // Fallback: stringify if it's an object, or use as-is
-              responseText = typeof response === 'object' ? JSON.stringify(response) : String(response);
-            }
-            
-            console.log(`✅ AI Generation Success - Response: ${responseText.substring(0, 100)}...`);
-            res.statusCode = 200;
-            res.setHeader('Content-Type', 'application/json');
-            res.setHeader('Access-Control-Allow-Origin', '*');
-            res.end(JSON.stringify({ text: responseText }));
-          }
-
-          // Reset circuit breaker on success
-          apiRequestInProgress = false;
-          console.log(`🔓 Circuit breaker: API request completed successfully`);
-        } catch (err) {
-          console.log(`❌ AI Generation Error:`, err.message);
-          console.log(`❌ Error Stack:`, err.stack);
-
-          // Reset circuit breaker on error
-          apiRequestInProgress = false;
-          console.log(`🔓 Circuit breaker: API request failed, resetting`);
-
-          // Handle different types of errors gracefully
-          let errorMessage = err.message || 'An error occurred while processing your request';
-          let statusCode = 500;
-
-          // Check for JSON parsing errors first
-          if (err instanceof SyntaxError && err.message.includes('JSON')) {
-            errorMessage = 'Invalid request format. Please check your request data.';
-            statusCode = 400;
-          } else if (err.message.includes('Image URL is required') || err.message.includes('image-to-video')) {
-            // Image-to-video model requires image URL
-            errorMessage = err.message; // Use the detailed error message we created
-            statusCode = 400;
-          } else if (err.message.includes('API key') || err.message.includes('API configuration')) {
-            // Provide more specific error message for API key issues
-            if (err.message.includes('OpenAI')) {
-              errorMessage = 'OpenAI API key is required. Please configure OPENAI_API_KEY in your .env file or Railway environment variables.';
-            } else if (err.message.includes('Gemini')) {
-              errorMessage = 'Gemini API key is required. Please configure GEMINI_API_KEY in your .env file or Railway environment variables.';
-            } else {
-              errorMessage = 'API configuration error. Please check your API keys in .env file or Railway environment variables.';
-            }
-            statusCode = 400;
-          } else if (err.message.includes('rate limit') || err.message.includes('429')) {
-            errorMessage = 'Rate limit exceeded. Please try again later.';
-            statusCode = 429;
-          } else if (err.message.includes('authentication') || err.message.includes('401')) {
-            errorMessage = 'Authentication failed. Please check your API keys.';
-            statusCode = 401;
-          } else if (err.message.includes('not found') || err.message.includes('404')) {
-            errorMessage = err.message; // Use the specific error message
-            statusCode = 404;
-          } else if (err.message.includes('timeout') || err.message.includes('timed out')) {
-            errorMessage = err.message;
-            statusCode = 408; // Request Timeout
-          }
-
-          res.statusCode = statusCode;
-          res.setHeader('Content-Type', 'application/json');
-          res.setHeader('Access-Control-Allow-Origin', '*');
-          res.end(JSON.stringify({ error: errorMessage, details: process.env.NODE_ENV === 'development' ? err.message : undefined }));
-        }
-      });
-      return;
-    }
+    // This route handler has been moved earlier in the file - see line ~1530
 
     // Proxy endpoint for fetching images (bypasses CORS)
     if (req.method === 'POST' && urlPath === '/api/proxy-image') {
