@@ -68,7 +68,11 @@ async function getUserApiKeyAndSubscription(userId) {
 const { initializeLocalDev, getActiveModelsLocal } = require('./local-dev-config');
 
 // Configuration
-const publicDir = path.join(__dirname, 'public');
+// In production (Railway), serve from dist folder (built frontend)
+// In development, serve from public folder
+const publicDir = process.env.NODE_ENV === 'production' 
+  ? path.join(__dirname, '..', 'dist')
+  : path.join(__dirname, 'public');
 const port = process.env.PORT || 3000;
 
 
