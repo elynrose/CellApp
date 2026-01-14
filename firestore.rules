@@ -18,35 +18,39 @@ service cloud.firestore {
     function isOwner(userId) {
       return isAuthenticated() && request.auth.uid == userId;
     }
+
+    // Prevent privilege escalation by blocking writes to sensitive fields from non-admins.
+    function ownerIsNotChangingRestrictedUserFields() {
+      // Fields that should only be set/changed by trusted server/admin logic.
+      let restricted = ['role', 'isAdmin', 'subscription', 'subscriptionStatus', 'credits', 'stripeCustomerId', 'stripeSubscriptionId'];
+      // For creates, diff() isn't available because resource.data may not exist; callers should use this only on update.
+      return !request.resource.data.diff(resource.data).changedKeys().hasAny(restricted);
+    }
     
     // Users collection with nested projects, sheets, cells, and generations
     match /users/{userId} {
-      allow read: if isAuthenticated();
+      // Users can only read their own user document; admins can read any.
+      allow read: if isOwner(userId) || isAdmin();
       allow create: if isAuthenticated() && request.auth.uid == userId;
-      allow update, delete: if isOwner(userId) || isAdmin();
+      // Owners may update *non-privileged* profile fields only. Admins may update anything.
+      allow update: if isAdmin() || (isOwner(userId) && ownerIsNotChangingRestrictedUserFields());
+      allow delete: if isAdmin() || isOwner(userId);
+
       // Projects subcollection
       match /projects/{projectId} {
-        allow read: if isAuthenticated();
-        allow create: if isAuthenticated();
-        allow update, delete: if isAuthenticated();
+        allow read, create, update, delete: if isOwner(userId) || isAdmin();
         
         // Sheets subcollection
         match /sheets/{sheetId} {
-          allow read: if isAuthenticated();
-          allow create: if isAuthenticated();
-          allow update, delete: if isAuthenticated();
+          allow read, create, update, delete: if isOwner(userId) || isAdmin();
           
           // Cells subcollection
           match /cells/{cellId} {
-            allow read: if isAuthenticated();
-            allow create: if isAuthenticated();
-            allow update, delete: if isAuthenticated();
+            allow read, create, update, delete: if isOwner(userId) || isAdmin();
             
             // Generations subcollection (nested under cells)
             match /generations/{generationId} {
-              allow read: if isAuthenticated();
-              allow create: if isAuthenticated();
-              allow update, delete: if isAuthenticated();
+              allow read, create, update, delete: if isOwner(userId) || isAdmin();
             }
           }
         }

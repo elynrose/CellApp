@@ -3,6 +3,17 @@ import { ref, uploadBytes, getDownloadURL, deleteObject, listAll } from 'firebas
 import { storage, auth } from './config';
 import { checkStoragePermission, getStorageLimitMessage } from '../utils/storagePermissions';
 
+async function getAuthHeaders() {
+  try {
+    const user = auth.currentUser;
+    if (!user) return {};
+    const token = await user.getIdToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Upload profile photo
  */
@@ -35,6 +46,7 @@ export async function uploadImageFromUrl(imageUrl, userId, projectId, sheetId, c
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(await getAuthHeaders()),
       },
       body: JSON.stringify({ url: imageUrl }),
     });
@@ -180,6 +192,7 @@ export async function uploadVideoFromUrl(videoUrl, userId, projectId, sheetId, c
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(await getAuthHeaders()),
         },
         body: JSON.stringify({ 
           videoUrl, 

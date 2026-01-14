@@ -141,6 +141,30 @@ function handleError(res, statusCode, message, error = null) {
 }
 
 /**
+ * Verify Firebase ID token from Authorization header.
+ * Returns uid or null if missing/invalid.
+ *
+ * NOTE: Frontend must send `Authorization: Bearer <idToken>`.
+ */
+async function getVerifiedUserId(req) {
+  try {
+    const header = req.headers?.authorization || req.headers?.Authorization || '';
+    const match = typeof header === 'string' ? header.match(/^Bearer\s+(.+)$/i) : null;
+    const token = match?.[1];
+    if (!token) return null;
+
+    // Ensure Admin SDK initialized (needed for verifyIdToken)
+    await initializeFirebase();
+    if (!admin.apps || admin.apps.length === 0) return null;
+
+    const decoded = await admin.auth().verifyIdToken(token);
+    return decoded?.uid || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
  * Initialize SQLite database
  */
 function initializeDatabase() {
@@ -1692,7 +1716,7 @@ window.storage = storage;`;
     }
 
     // Stripe endpoints
-    if (req.url === '/api/stripe/create-checkout-session' && req.method === 'POST') {
+    if (pathname === '/api/stripe/create-checkout-session' && req.method === 'POST') {
       if (!stripe) {
         handleError(res, 500, 'Stripe not configured');
         return;
@@ -1702,8 +1726,15 @@ window.storage = storage;`;
       req.on('data', chunk => { body += chunk; });
       req.on('end', async () => {
         try {
+          const verifiedUserId = await getVerifiedUserId(req);
+          if (process.env.NODE_ENV === 'production' && !verifiedUserId) {
+            handleError(res, 401, 'Unauthorized');
+            return;
+          }
+
           const data = JSON.parse(body);
-          const { priceId, userId } = data;
+          const { priceId } = data;
+          const userId = verifiedUserId || data.userId;
           
           if (!priceId || !userId) {
             handleError(res, 400, 'Missing priceId or userId');
@@ -1744,7 +1775,7 @@ window.storage = storage;`;
       return;
     }
 
-    if (req.url === '/api/stripe/create-portal-session' && req.method === 'POST') {
+    if (pathname === '/api/stripe/create-portal-session' && req.method === 'POST') {
       if (!stripe) {
         handleError(res, 500, 'Stripe not configured');
         return;
@@ -1754,8 +1785,26 @@ window.storage = storage;`;
       req.on('data', chunk => { body += chunk; });
       req.on('end', async () => {
         try {
-          const data = JSON.parse(body);
-          const { customerId } = data;
+          const verifiedUserId = await getVerifiedUserId(req);
+          if (process.env.NODE_ENV === 'production' && !verifiedUserId) {
+            handleError(res, 401, 'Unauthorized');
+            return;
+          }
+
+          // Prefer server-trusted customerId from the user's profile (prevents opening other users' portals)
+          let customerId = null;
+          if (verifiedUserId) {
+            const firestoreInstance = await initializeFirebase();
+            if (firestoreInstance) {
+              const userDoc = await firestoreInstance.collection('users').doc(verifiedUserId).get();
+              customerId = userDoc.exists ? (userDoc.data()?.stripeCustomerId || null) : null;
+            }
+          }
+          // Dev fallback: allow passing customerId explicitly
+          if (!customerId) {
+            const data = JSON.parse(body || '{}');
+            customerId = data.customerId || null;
+          }
           
           if (!customerId) {
             handleError(res, 400, 'Missing customerId');
@@ -2025,9 +2074,9 @@ window.storage = storage;`;
     }
 
     // Endpoint to check video/image job status
-    if (req.method === 'GET' && req.url.startsWith('/api/job-status/')) {
+    if (req.method === 'GET' && pathname.startsWith('/api/job-status/')) {
       // Extract jobId from URL (remove query params if any)
-      const urlParts = req.url.split('/api/job-status/')[1];
+      const urlParts = pathname.split('/api/job-status/')[1];
       const jobId = urlParts ? urlParts.split('?')[0] : null;
       
       if (!jobId) {
@@ -2039,13 +2088,23 @@ window.storage = storage;`;
       }
 
       try {
+        // Require verified user in production.
+        const verifiedUserId = await getVerifiedUserId(req);
+        if (process.env.NODE_ENV === 'production' && !verifiedUserId) {
+          res.statusCode = 401;
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.end(JSON.stringify({ error: 'Unauthorized' }));
+          return;
+        }
+
         // Extract userId from query params if provided
         // Parse the URL to get query parameters
-        let userId = null;
+        let userId = verifiedUserId || null;
         const urlWithQuery = req.url.split('?');
         if (urlWithQuery.length > 1) {
           const queryParams = new URLSearchParams(urlWithQuery[1]);
-          userId = queryParams.get('userId');
+          userId = userId || queryParams.get('userId');
         }
         
         let openaiApiKey = process.env.OPENAI_API_KEY;
@@ -2320,6 +2379,16 @@ window.storage = storage;`;
       });
       req.on('end', async () => {
         try {
+          // Require verified user in production; in dev, allow missing token.
+          const verifiedUserId = await getVerifiedUserId(req);
+          if (process.env.NODE_ENV === 'production' && !verifiedUserId) {
+            res.statusCode = 401;
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.end(JSON.stringify({ error: 'Unauthorized' }));
+            return;
+          }
+
           // Circuit breaker - prevent multiple concurrent API requests
           if (apiRequestInProgress) {
             console.log(`🚫 API request already in progress, rejecting new request`);
@@ -2349,7 +2418,7 @@ window.storage = storage;`;
           const model = data.model || 'gpt-3.5-turbo';
           const temperature = data.temperature || 0.7;
           const maxTokens = data.max_tokens || data.maxTokens || undefined;
-          const userId = data.userId || null;
+          const userId = verifiedUserId || data.userId || null;
           // CRITICAL: Check the raw body string BEFORE parsing to see if seconds is quoted
           console.log(`📥 Raw request body (first 500 chars):`, body.substring(0, 500));
           
@@ -2516,7 +2585,7 @@ window.storage = storage;`;
     }
 
     // Proxy endpoint for fetching images (bypasses CORS)
-    if (req.method === 'POST' && req.url === '/api/proxy-image') {
+    if (req.method === 'POST' && pathname === '/api/proxy-image') {
       let body = '';
       req.on('data', chunk => {
         body += chunk;
@@ -2524,6 +2593,15 @@ window.storage = storage;`;
       });
       req.on('end', async () => {
         try {
+          const verifiedUserId = await getVerifiedUserId(req);
+          if (process.env.NODE_ENV === 'production' && !verifiedUserId) {
+            res.statusCode = 401;
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.end(JSON.stringify({ error: 'Unauthorized' }));
+            return;
+          }
+
           const data = JSON.parse(body || '{}');
           const imageUrl = data.url;
 
@@ -2855,7 +2933,7 @@ window.storage = storage;`;
     }
 
     // Server-side video upload endpoint - streams directly from OpenAI to Firebase Storage
-    if (req.method === 'POST' && req.url === '/api/upload-video') {
+    if (req.method === 'POST' && pathname === '/api/upload-video') {
       let body = '';
       req.on('data', chunk => {
         body += chunk;
@@ -2863,8 +2941,18 @@ window.storage = storage;`;
       });
       req.on('end', async () => {
         try {
+          const verifiedUserId = await getVerifiedUserId(req);
+          if (process.env.NODE_ENV === 'production' && !verifiedUserId) {
+            res.statusCode = 401;
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.end(JSON.stringify({ error: 'Unauthorized' }));
+            return;
+          }
+
           const data = JSON.parse(body || '{}');
-          const { videoUrl, userId, projectId, sheetId, cellId } = data;
+          const { videoUrl, projectId, sheetId, cellId } = data;
+          const userId = verifiedUserId || data.userId;
 
           if (!videoUrl || !userId || !projectId || !sheetId || !cellId) {
             res.statusCode = 400;

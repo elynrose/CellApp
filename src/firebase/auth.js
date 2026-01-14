@@ -175,22 +175,10 @@ export async function getCurrentUserProfile() {
 /**
  * Make current user admin
  */
-export async function makeCurrentUserAdmin() {
-  try {
-    const user = auth.currentUser;
-    if (!user) {
-      return { success: false, error: 'No user logged in' };
-    }
-
-    await setDoc(doc(db, 'users', user.uid), {
-      role: 'admin',
-      isAdmin: true,
-      adminGrantedAt: new Date()
-    }, { merge: true });
-
-    return { success: true };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-}
+// IMPORTANT SECURITY NOTE:
+// Do NOT provide any client-side mechanism to grant admin privileges.
+// Admin should be granted only via trusted server-side tooling / Firebase Console / Cloud Functions.
+//
+// This function used to exist and allowed self-escalation by writing `role/isAdmin` on the user doc.
+// It has been intentionally removed.
 

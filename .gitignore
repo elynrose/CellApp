@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Secrets / local env files (never commit)
+.env
+.env.*
+data.txt
+*.pem
+*firebase-adminsdk*.json

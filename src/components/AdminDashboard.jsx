@@ -9,7 +9,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, 
   PieChart, Pie, Cell, LineChart, Line, AreaChart, Area 
 } from 'recharts';
-import { isCurrentUserAdmin, makeCurrentUserAdmin, signOutUser } from '../firebase/auth';
+import { isCurrentUserAdmin, signOutUser } from '../firebase/auth';
 import { 
   getAllUsers, updateUser, deleteUser, 
   getAllProjects, deleteProject,

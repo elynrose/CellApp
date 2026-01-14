@@ -62,14 +62,14 @@ export function optimizePrompt(prompt) {
   });
 
   // Remove redundant punctuation
-  optimized = optimized.replace(/[\.]{2,}/g, '.');
-  optimized = optimized.replace(/[!]{2,}/g, '!');
-  optimized = optimized.replace(/[?]{2,}/g, '?');
-  optimized = optimized.replace(/[,]{2,}/g, ',');
+  optimized = optimized.replace(/\.{2,}/g, '.');
+  optimized = optimized.replace(/!{2,}/g, '!');
+  optimized = optimized.replace(/\?{2,}/g, '?');
+  optimized = optimized.replace(/,{2,}/g, ',');
 
   // Remove leading/trailing punctuation that doesn't make sense
-  optimized = optimized.replace(/^[,\s\.]+/, '');
-  optimized = optimized.replace(/[,\s\.]+$/, '');
+  optimized = optimized.replace(/^[,\s.]+/, '');
+  optimized = optimized.replace(/[,\s.]+$/, '');
 
   // Remove empty parentheses and brackets
   optimized = optimized.replace(/\(\s*\)/g, '');

@@ -2,6 +2,18 @@
 // Credit costs based on OpenAI and Gemini API pricing
 
 import { getAllPackages } from '../firebase/firestore';
+import { auth } from '../firebase/config';
+
+async function getAuthHeaders() {
+  try {
+    const user = auth.currentUser;
+    if (!user) return {};
+    const token = await user.getIdToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
+}
 
 // Default/fallback plans (used if Firestore is unavailable)
 const DEFAULT_PLANS = {
@@ -138,6 +150,7 @@ export async function createCheckoutSession(priceId, userId) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(await getAuthHeaders()),
       },
       body: JSON.stringify({
         priceId,
@@ -165,6 +178,7 @@ export async function createPortalSession(customerId) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(await getAuthHeaders()),
       },
       body: JSON.stringify({
         customerId

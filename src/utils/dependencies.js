@@ -302,39 +302,8 @@ export async function resolveCellReference(reference, context) {
       }
     }
 
-    // NOTE: We no longer wait for running cells - just use whatever value is available
-    // Skip waiting logic - cells will reference whatever is there (even if empty)
-    if (false && runningCellsSet && runningCellsSet.has(cellId)) {
-      // Dependency is still running - wait for it to complete
-      // This ensures we don't try to resolve a dependency that's still generating
-      const maxWaitTime = 300000; // 5 minutes
-      const checkInterval = 100; // Check every 100ms
-      const startTime = Date.now();
-      
-      while (runningCellsSet.has(cellId)) {
-        const elapsed = Date.now() - startTime;
-        if (elapsed > maxWaitTime) {
-          return `[ERROR: Timeout waiting for cell ${cellId} to complete]`;
-        }
-        await new Promise(resolve => setTimeout(resolve, checkInterval));
-        
-        // Refresh cell data in case it was updated
-        if (getCell) {
-          const updatedCell = await getCell(targetSheet.id, cellId);
-          if (updatedCell) {
-            cell = updatedCell;
-          }
-        } else if (targetSheet.cells) {
-          cell = targetSheet.cells[cellId];
-        } else if (getLatestCells && targetSheet.id === currentSheet.id) {
-          // Try to get latest cells if available
-          const latestCells = getLatestCells();
-          if (latestCells && latestCells[cellId]) {
-            cell = latestCells[cellId];
-          }
-        }
-      }
-    }
+    // NOTE: We do not wait for running cells here — we use whatever value is available
+    // (even if empty) to avoid blocking and to keep execution responsive.
     
     // Also verify cell has output after waiting
     // If it still doesn't have output after the dependency finished, wait a bit more for state to propagate

@@ -2,6 +2,19 @@
  * API Service - Backend API integration for AI generation
  */
 
+import { auth } from './firebase/config';
+
+async function getAuthHeaders() {
+  try {
+    const user = auth.currentUser;
+    if (!user) return {};
+    const token = await user.getIdToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Get API base URL based on environment
  */
@@ -98,6 +111,7 @@ export async function generateAI(prompt, model, temperature = 0.7, maxTokens = u
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            ...(await getAuthHeaders()),
           },
           body: fixedJson,
         });
@@ -115,6 +129,7 @@ export async function generateAI(prompt, model, temperature = 0.7, maxTokens = u
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(await getAuthHeaders()),
       },
       body: jsonBody,
     });
@@ -157,6 +172,7 @@ export async function checkJobStatus(jobId, userId = null) {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
+        ...(await getAuthHeaders()),
       },
     });
 
@@ -188,7 +204,11 @@ export async function checkJobStatus(jobId, userId = null) {
  */
 export async function getAvailableModels() {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/models`);
+    const response = await fetch(`${API_BASE_URL}/api/models`, {
+      headers: {
+        ...(await getAuthHeaders()),
+      }
+    });
     if (!response.ok) throw new Error('Failed to fetch models');
     const data = await response.json();
     return { success: true, models: data.models || [] };
