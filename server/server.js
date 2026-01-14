@@ -654,7 +654,27 @@ async function makeAPIRequest(provider, endpoint, data = null, apiKey = null) {
 
           if (res.statusCode >= 400) {
             console.log(`❌ API Error ${res.statusCode}: ${responseData}`);
-            reject(new Error(`API Error ${res.statusCode}: ${responseData.substring(0, 200)}`));
+            // Try to parse error response for better error messages
+            let errorMessage = `API Error ${res.statusCode}`;
+            try {
+              const errorData = JSON.parse(responseData);
+              if (errorData.error?.message) {
+                errorMessage = errorData.error.message;
+              } else if (errorData.message) {
+                errorMessage = errorData.message;
+              } else {
+                errorMessage = responseData.substring(0, 200);
+              }
+            } catch (e) {
+              // If not JSON, use the raw response but clean it up
+              const cleanResponse = responseData.substring(0, 200).trim();
+              // Remove duplicate status codes from error message
+              errorMessage = cleanResponse.replace(/^\d+\s*:\s*/i, '').replace(/^API\s+Error\s+\d+\s*:\s*/i, '');
+              if (!errorMessage) {
+                errorMessage = `API request failed with status ${res.statusCode}`;
+              }
+            }
+            reject(new Error(errorMessage));
             return;
           }
 
