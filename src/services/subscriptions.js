@@ -126,7 +126,7 @@ function getApiBaseUrl() {
   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
     return `http://${window.location.hostname}:3000`;
   }
-  return 'https://gpt-cells-app-production.up.railway.app';
+  return 'https://cellapp-production.up.railway.app';
 }
 
 /**

@@ -10,7 +10,7 @@ function getApiBaseUrl() {
     // Use relative URL in development to leverage Vite proxy
     return '';
   }
-  return 'https://gpt-cells-app-production.up.railway.app';
+  return 'https://cellapp-production.up.railway.app';
 }
 
 const API_BASE_URL = getApiBaseUrl();

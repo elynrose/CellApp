@@ -173,7 +173,7 @@ export async function uploadVideoFromUrl(videoUrl, userId, projectId, sheetId, c
     try {
       const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
         ? 'http://localhost:3000' 
-        : 'https://gpt-cells-app-production.up.railway.app';
+        : 'https://cellapp-production.up.railway.app';
       
       console.log(`📡 Calling upload-video endpoint: ${API_BASE_URL}/api/upload-video`);
       uploadResponse = await fetch(`${API_BASE_URL}/api/upload-video`, {

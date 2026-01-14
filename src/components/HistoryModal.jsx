@@ -22,7 +22,7 @@ const ImageWithErrorHandling = ({ src, alt, className, ...props }) => {
         try {
             const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
                 ? '' 
-                : 'https://gpt-cells-app-production.up.railway.app';
+                : 'https://cellapp-production.up.railway.app';
             
             const response = await fetch(`${API_BASE_URL}/api/proxy-image`, {
                 method: 'POST',
