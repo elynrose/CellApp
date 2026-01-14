@@ -1531,7 +1531,7 @@ window.storage = storage;`;
 
     // Main LLM endpoint - check early to avoid conflicts with other routes
     if (req.method === 'POST' && urlPath === '/api/llm') {
-      console.log(`✅ Matched /api/llm endpoint`);
+      console.log(`✅ Matched /api/llm endpoint - Method: ${req.method}, URL: ${req.url}, Path: ${urlPath}`);
       let body = '';
       req.on('data', chunk => {
         body += chunk;
