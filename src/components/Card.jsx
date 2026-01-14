@@ -1,5 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { parseConditionalBlocks } from '../utils/conditions';
+import { auth } from '../firebase/config';
+
+async function getAuthHeaders() {
+    try {
+        const user = auth.currentUser;
+        if (!user) return {};
+        const token = await user.getIdToken();
+        return token ? { Authorization: `Bearer ${token}` } : {};
+    } catch {
+        return {};
+    }
+}
 
 // Image component with error handling and retry
 const ImageWithErrorHandling = ({ src, alt, className, draggable, ...props }) => {
@@ -29,6 +41,7 @@ const ImageWithErrorHandling = ({ src, alt, className, draggable, ...props }) =>
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    ...(await getAuthHeaders()),
                 },
                 body: JSON.stringify({ url })
             });

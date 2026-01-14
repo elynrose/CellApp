@@ -15,7 +15,7 @@ import {
   serverTimestamp,
   deleteField
 } from 'firebase/firestore';
-import { db } from './config';
+import { auth, db } from './config';
 
 /**
  * Get API base URL based on environment
@@ -25,6 +25,17 @@ function getApiBaseUrl() {
     return `http://${window.location.hostname}:3000`;
   }
   return 'https://gpt-cells-app-production.up.railway.app';
+}
+
+async function getAuthHeaders() {
+  try {
+    const user = auth.currentUser;
+    if (!user) return {};
+    const token = await user.getIdToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -456,7 +467,11 @@ export async function getActiveModels() {
   } catch (error) {
     // Fallback to API if Firebase fails
     try {
-      const response = await fetch(`${getApiBaseUrl()}/api/models`);
+      const response = await fetch(`${getApiBaseUrl()}/api/models`, {
+        headers: {
+          ...(await getAuthHeaders()),
+        }
+      });
       const data = await response.json();
       return { success: true, models: data.models || [] };
     } catch (apiError) {

@@ -1518,6 +1518,24 @@ window.storage = storage;`;
       return;
     }
 
+    /**
+     * Firebase ID-token auth for API endpoints (production enforcement).
+     * We derive userId from the verified token and do NOT trust userId from request body/query in production.
+     */
+    const isApiRequest = pathname.startsWith('/api/');
+    const isPublicApi =
+      pathname === '/api/models' ||
+      pathname === '/api/models/diagnose' ||
+      pathname === '/api/stripe/webhook';
+
+    // Verified Firebase uid (or null if missing/invalid)
+    const verifiedUserId = (isApiRequest && !isPublicApi) ? await getVerifiedUserId(req) : null;
+
+    if (process.env.NODE_ENV === 'production' && isApiRequest && !isPublicApi && !verifiedUserId) {
+      handleError(res, 401, 'Unauthorized');
+      return;
+    }
+
     // Diagnostic endpoint for Firebase models
     if (req.url === '/api/models/diagnose') {
       try {
@@ -1726,15 +1744,9 @@ window.storage = storage;`;
       req.on('data', chunk => { body += chunk; });
       req.on('end', async () => {
         try {
-          const verifiedUserId = await getVerifiedUserId(req);
-          if (process.env.NODE_ENV === 'production' && !verifiedUserId) {
-            handleError(res, 401, 'Unauthorized');
-            return;
-          }
-
           const data = JSON.parse(body);
           const { priceId } = data;
-          const userId = verifiedUserId || data.userId;
+          const userId = verifiedUserId || (process.env.NODE_ENV !== 'production' ? data.userId : null);
           
           if (!priceId || !userId) {
             handleError(res, 400, 'Missing priceId or userId');
@@ -1785,12 +1797,6 @@ window.storage = storage;`;
       req.on('data', chunk => { body += chunk; });
       req.on('end', async () => {
         try {
-          const verifiedUserId = await getVerifiedUserId(req);
-          if (process.env.NODE_ENV === 'production' && !verifiedUserId) {
-            handleError(res, 401, 'Unauthorized');
-            return;
-          }
-
           // Prefer server-trusted customerId from the user's profile (prevents opening other users' portals)
           let customerId = null;
           if (verifiedUserId) {
@@ -2088,23 +2094,14 @@ window.storage = storage;`;
       }
 
       try {
-        // Require verified user in production.
-        const verifiedUserId = await getVerifiedUserId(req);
-        if (process.env.NODE_ENV === 'production' && !verifiedUserId) {
-          res.statusCode = 401;
-          res.setHeader('Content-Type', 'application/json');
-          res.setHeader('Access-Control-Allow-Origin', '*');
-          res.end(JSON.stringify({ error: 'Unauthorized' }));
-          return;
-        }
-
-        // Extract userId from query params if provided
-        // Parse the URL to get query parameters
+        // Derive userId from verified token (production). In dev, allow fallback query param for convenience.
         let userId = verifiedUserId || null;
-        const urlWithQuery = req.url.split('?');
-        if (urlWithQuery.length > 1) {
-          const queryParams = new URLSearchParams(urlWithQuery[1]);
-          userId = userId || queryParams.get('userId');
+        if (!userId && process.env.NODE_ENV !== 'production') {
+          const urlWithQuery = (req.url || '').split('?');
+          if (urlWithQuery.length > 1) {
+            const queryParams = new URLSearchParams(urlWithQuery[1]);
+            userId = queryParams.get('userId');
+          }
         }
         
         let openaiApiKey = process.env.OPENAI_API_KEY;
@@ -2379,16 +2376,6 @@ window.storage = storage;`;
       });
       req.on('end', async () => {
         try {
-          // Require verified user in production; in dev, allow missing token.
-          const verifiedUserId = await getVerifiedUserId(req);
-          if (process.env.NODE_ENV === 'production' && !verifiedUserId) {
-            res.statusCode = 401;
-            res.setHeader('Content-Type', 'application/json');
-            res.setHeader('Access-Control-Allow-Origin', '*');
-            res.end(JSON.stringify({ error: 'Unauthorized' }));
-            return;
-          }
-
           // Circuit breaker - prevent multiple concurrent API requests
           if (apiRequestInProgress) {
             console.log(`🚫 API request already in progress, rejecting new request`);
@@ -2418,7 +2405,8 @@ window.storage = storage;`;
           const model = data.model || 'gpt-3.5-turbo';
           const temperature = data.temperature || 0.7;
           const maxTokens = data.max_tokens || data.maxTokens || undefined;
-          const userId = verifiedUserId || data.userId || null;
+          // Derive userId from verified token (production). In dev, allow request body fallback for convenience.
+          const userId = verifiedUserId || (process.env.NODE_ENV !== 'production' ? (data.userId || null) : null);
           // CRITICAL: Check the raw body string BEFORE parsing to see if seconds is quoted
           console.log(`📥 Raw request body (first 500 chars):`, body.substring(0, 500));
           
@@ -2593,15 +2581,6 @@ window.storage = storage;`;
       });
       req.on('end', async () => {
         try {
-          const verifiedUserId = await getVerifiedUserId(req);
-          if (process.env.NODE_ENV === 'production' && !verifiedUserId) {
-            res.statusCode = 401;
-            res.setHeader('Content-Type', 'application/json');
-            res.setHeader('Access-Control-Allow-Origin', '*');
-            res.end(JSON.stringify({ error: 'Unauthorized' }));
-            return;
-          }
-
           const data = JSON.parse(body || '{}');
           const imageUrl = data.url;
 
@@ -2778,9 +2757,9 @@ window.storage = storage;`;
       return;
     }
 
-    // Video proxy endpoint - serves OpenAI video content with authentication
-    if (req.method === 'GET' && req.url.startsWith('/api/proxy-video/')) {
-      const videoId = req.url.split('/api/proxy-video/')[1]?.split('?')[0];
+    // Video proxy endpoint - serves OpenAI video content (requires auth in production)
+    if (req.method === 'GET' && pathname.startsWith('/api/proxy-video/')) {
+      const videoId = pathname.split('/api/proxy-video/')[1]?.split('?')[0];
       
       if (!videoId) {
         res.statusCode = 400;
@@ -2791,12 +2770,14 @@ window.storage = storage;`;
       }
 
       try {
-        // Extract userId from query params if provided
-        const urlWithQuery = req.url.split('?');
-        let userId = null;
-        if (urlWithQuery.length > 1) {
-          const queryParams = new URLSearchParams(urlWithQuery[1]);
-          userId = queryParams.get('userId');
+        // Derive userId from verified token (production). In dev, allow query param fallback.
+        let userId = verifiedUserId || null;
+        if (!userId && process.env.NODE_ENV !== 'production') {
+          const urlWithQuery = (req.url || '').split('?');
+          if (urlWithQuery.length > 1) {
+            const queryParams = new URLSearchParams(urlWithQuery[1]);
+            userId = queryParams.get('userId');
+          }
         }
         
         let openaiApiKey = process.env.OPENAI_API_KEY;
@@ -2941,18 +2922,9 @@ window.storage = storage;`;
       });
       req.on('end', async () => {
         try {
-          const verifiedUserId = await getVerifiedUserId(req);
-          if (process.env.NODE_ENV === 'production' && !verifiedUserId) {
-            res.statusCode = 401;
-            res.setHeader('Content-Type', 'application/json');
-            res.setHeader('Access-Control-Allow-Origin', '*');
-            res.end(JSON.stringify({ error: 'Unauthorized' }));
-            return;
-          }
-
           const data = JSON.parse(body || '{}');
           const { videoUrl, projectId, sheetId, cellId } = data;
-          const userId = verifiedUserId || data.userId;
+          const userId = verifiedUserId || (process.env.NODE_ENV !== 'production' ? data.userId : null);
 
           if (!videoUrl || !userId || !projectId || !sheetId || !cellId) {
             res.statusCode = 400;

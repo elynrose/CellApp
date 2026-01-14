@@ -164,10 +164,8 @@ export async function generateAI(prompt, model, temperature = 0.7, maxTokens = u
 export async function checkJobStatus(jobId, userId = null) {
   try {
     const API_BASE_URL = getApiBaseUrl();
-    // Add userId as query parameter if provided
-    const url = userId 
-      ? `${API_BASE_URL}/api/job-status/${jobId}?userId=${encodeURIComponent(userId)}`
-      : `${API_BASE_URL}/api/job-status/${jobId}`;
+    // Server derives userId from Firebase ID token (Authorization header).
+    const url = `${API_BASE_URL}/api/job-status/${jobId}`;
     const response = await fetch(url, {
       method: 'GET',
       headers: {
@@ -221,13 +219,21 @@ export async function getAvailableModels() {
  * Legacy SQLite endpoints (for backward compatibility during migration)
  */
 export const fetchSheets = async () => {
-    const response = await fetch(`${API_BASE_URL}/api/sheets`);
+    const response = await fetch(`${API_BASE_URL}/api/sheets`, {
+      headers: {
+        ...(await getAuthHeaders()),
+      }
+    });
     if (!response.ok) throw new Error('Failed to fetch sheets');
     return response.json();
 };
 
 export const fetchCells = async (sheetId) => {
-    const response = await fetch(`${API_BASE_URL}/api/sheets/${sheetId}/cells`);
+    const response = await fetch(`${API_BASE_URL}/api/sheets/${sheetId}/cells`, {
+      headers: {
+        ...(await getAuthHeaders()),
+      }
+    });
     if (!response.ok) throw new Error('Failed to fetch cells');
     return response.json();
 };
@@ -237,6 +243,7 @@ export const saveCell = async (sheetId, cellId, data) => {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
+            ...(await getAuthHeaders()),
         },
         body: JSON.stringify({ sheetId, cellId, ...data }),
     });
@@ -247,26 +254,41 @@ export const saveCell = async (sheetId, cellId, data) => {
 export const createSheet = async (name) => {
     const response = await fetch(`${API_BASE_URL}/api/sheets`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(await getAuthHeaders()),
+        },
         body: JSON.stringify({ name })
     });
     return response.json();
 };
 
 export const deleteSheet = async (id) => {
-    await fetch(`${API_BASE_URL}/api/sheets/${id}`, { method: 'DELETE' });
+    await fetch(`${API_BASE_URL}/api/sheets/${id}`, { 
+      method: 'DELETE',
+      headers: {
+        ...(await getAuthHeaders()),
+      }
+    });
 };
 
 export const renameSheet = async (id, name) => {
     await fetch(`${API_BASE_URL}/api/sheets/${id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(await getAuthHeaders()),
+        },
         body: JSON.stringify({ name })
     });
 };
 
 export const fetchConnections = async (sheetId) => {
-    const response = await fetch(`${API_BASE_URL}/api/sheets/${sheetId}/connections`);
+    const response = await fetch(`${API_BASE_URL}/api/sheets/${sheetId}/connections`, {
+      headers: {
+        ...(await getAuthHeaders()),
+      }
+    });
     if (!response.ok) throw new Error('Failed to fetch connections');
     return response.json();
 };
@@ -274,7 +296,10 @@ export const fetchConnections = async (sheetId) => {
 export const saveConnection = async (sheetId, sourceId, targetId) => {
     const response = await fetch(`${API_BASE_URL}/api/connections`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(await getAuthHeaders()),
+        },
         body: JSON.stringify({ sheetId, sourceId, targetId, action: 'create' })
     });
     if (!response.ok) throw new Error('Failed to save connection');
@@ -284,7 +309,10 @@ export const saveConnection = async (sheetId, sourceId, targetId) => {
 export const deleteConnection = async (sheetId, sourceId, targetId) => {
     const response = await fetch(`${API_BASE_URL}/api/connections`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(await getAuthHeaders()),
+        },
         body: JSON.stringify({ sheetId, sourceId, targetId, action: 'delete' })
     });
     if (!response.ok) throw new Error('Failed to delete connection');
