@@ -1340,6 +1340,11 @@ const server = http.createServer(async (req, res) => {
 
     // Normalize URL by removing query string for routing
     const urlPath = req.url ? req.url.split('?')[0] : '/';
+    
+    // Debug logging for API requests
+    if (req.url && req.url.startsWith('/api/')) {
+      console.log(`🔍 API Request Debug - Method: ${req.method}, URL: ${req.url}, Path: ${urlPath}`);
+    }
 
     // Handle CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
