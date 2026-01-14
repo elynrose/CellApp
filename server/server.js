@@ -1338,6 +1338,9 @@ const server = http.createServer(async (req, res) => {
     // Get client IP for rate limiting
     const clientIP = req.connection.remoteAddress || req.socket.remoteAddress || 'unknown';
 
+    // Normalize URL by removing query string for routing
+    const urlPath = req.url ? req.url.split('?')[0] : '/';
+
     // Handle CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -2342,7 +2345,7 @@ window.storage = storage;`;
       return;
     }
 
-    if (req.method === 'POST' && req.url === '/api/llm') {
+    if (req.method === 'POST' && urlPath === '/api/llm') {
       console.log(`✅ Matched /api/llm endpoint`);
       let body = '';
       req.on('data', chunk => {
@@ -2548,7 +2551,7 @@ window.storage = storage;`;
     }
 
     // Proxy endpoint for fetching images (bypasses CORS)
-    if (req.method === 'POST' && req.url === '/api/proxy-image') {
+    if (req.method === 'POST' && urlPath === '/api/proxy-image') {
       let body = '';
       req.on('data', chunk => {
         body += chunk;
