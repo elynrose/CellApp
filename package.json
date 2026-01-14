@@ -8,7 +8,12 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "server": "node server/server.js"
+    "server": "node server/server.js",
+    "start": "node server/server.js",
+    "build:server": "vite build && node scripts/sync-server-public.mjs"
+  },
+  "engines": {
+    "node": "20.x"
   },
   "dependencies": {
     "@use-gesture/react": "^10.3.1",

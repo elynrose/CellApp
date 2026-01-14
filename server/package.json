@@ -1,6 +1,18 @@
 {
+  "name": "draftai-server",
+  "private": true,
   "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": "20.x"
+  },
   "dependencies": {
+    "dotenv": "^17.2.3",
+    "firebase-admin": "^13.6.0",
+    "openai": "^6.10.0",
+    "sqlite3": "^5.1.7",
     "stripe": "^14.0.0"
   }
 }
