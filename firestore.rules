@@ -9,9 +9,12 @@ service cloud.firestore {
     
     // Helper function to check if user is admin
     function isAdmin() {
-      return isAuthenticated() && 
-             (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true ||
-              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+      return isAuthenticated()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && (
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true
+          || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        );
     }
     
     // Helper function to check if user owns the resource
@@ -22,7 +25,16 @@ service cloud.firestore {
     // Prevent privilege escalation by blocking writes to sensitive fields from non-admins.
     function ownerIsNotChangingRestrictedUserFields() {
       // Fields that should only be set/changed by trusted server/admin logic.
-      let restricted = ['role', 'isAdmin', 'subscription', 'subscriptionStatus', 'credits', 'stripeCustomerId', 'stripeSubscriptionId'];
+      let restricted = [
+        'role',
+        'isAdmin',
+        'adminGrantedAt',
+        'subscription',
+        'subscriptionStatus',
+        'credits',
+        'stripeCustomerId',
+        'stripeSubscriptionId'
+      ];
       // For creates, diff() isn't available because resource.data may not exist; callers should use this only on update.
       return !request.resource.data.diff(resource.data).changedKeys().hasAny(restricted);
     }
