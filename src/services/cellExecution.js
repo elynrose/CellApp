@@ -3,7 +3,8 @@
  * Handles running cells with AI generation, dependency resolution, and history tracking
  */
 
-import { generateAI, getModelType, checkJobStatus } from '../api';
+import { generateAI, getModelType, checkJobStatus, executeCellTools } from '../api';
+import { CELL_TOOLS_INSTRUCTION, parseToolCallsFromText, isToolAllowedForCell, cellWantsTools } from '../utils/cellTools';
 import { resolveDependencies, parseDependencies, topologicalSort, findDependentCells } from '../utils/dependencies';
 import { shouldCellExecute } from '../utils/conditions';
 import { saveCell, saveGeneration, deductCredits, getUserSubscription, resetMonthlyCredits } from '../firebase/firestore';
@@ -14,6 +15,61 @@ import { getCreditCost, hasEnoughCredits, getPlanById } from '../services/subscr
 /**
  * Get format instructions based on output format setting
  */
+const MAX_TOOL_ROUNDS = 4;
+
+async function runTextGenerationWithTools({
+  basePrompt,
+  model,
+  temperature,
+  maxTokens,
+  userId,
+  cell,
+  creditCost,
+  subscriptionData
+}) {
+  let conversation = basePrompt + CELL_TOOLS_INSTRUCTION;
+  let lastText = '';
+  const toolLog = [];
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    const result = await generateAI(conversation, model, temperature, maxTokens, undefined, undefined, userId);
+    if (!result.success) {
+      return { ...result, toolLog };
+    }
+    if (result.jobId && result.status) {
+      return { ...result, toolLog };
+    }
+
+    lastText = result.output || '';
+
+    const deductResult = await deductCredits(userId, creditCost);
+    if (deductResult.success && subscriptionData?.credits) {
+      subscriptionData.credits.current = deductResult.remainingCredits;
+    }
+
+    const calls = parseToolCallsFromText(lastText).filter((c) => isToolAllowedForCell(cell, c.tool));
+    if (!calls.length) {
+      return { success: true, output: lastText, toolLog };
+    }
+
+    const exec = await executeCellTools(calls);
+    toolLog.push({
+      round: round + 1,
+      requested: calls,
+      results: exec.results || [],
+      error: exec.success ? null : exec.error
+    });
+    const toolPayload = exec.success
+      ? JSON.stringify(exec.results, null, 2)
+      : `Tool execution failed: ${exec.error || 'unknown'}`;
+
+    conversation =
+      `${conversation}\n\n[ASSISTANT]\n${lastText}\n\n[TOOL RESULTS]\n${toolPayload}\n\nWrite the final answer for the user (plain text, no tool blocks unless you must call another allowed tool).`;
+  }
+
+  return { success: true, output: lastText, toolLog };
+}
+
 function getFormatInstructions(outputFormat) {
     const formatMap = {
         'markdown': 'Format your response as Markdown with proper headings, lists, and formatting.',
@@ -719,17 +775,35 @@ export async function runCell({
       console.log(`🎬 cellExecution: Before generateAI call - seconds type: ${typeof videoSettings.seconds}, value: "${videoSettings.seconds}"`);
     }
 
-    const result = await generateAI(finalPrompt, model, temperature, maxTokens, videoSettings, audioSettings, userId);
-    
-    // Deduct credits after successful generation
-    if (result.success) {
-      const deductResult = await deductCredits(userId, creditCost);
-      if (!deductResult.success) {
-        console.warn('Failed to deduct credits:', deductResult.error);
-        // Don't fail the generation, just log the warning
-      } else {
-        // Update credits in subscription data for immediate UI update
-        if (subscriptionData?.credits) {
+    const useTools =
+      cellWantsTools(cell) &&
+      modelType === 'text' &&
+      !videoSettings &&
+      !audioSettings;
+
+    let result;
+    let toolLogFromRun = null;
+    if (useTools) {
+      result = await runTextGenerationWithTools({
+        basePrompt: finalPrompt,
+        model,
+        temperature,
+        maxTokens,
+        userId,
+        cell,
+        creditCost,
+        subscriptionData
+      });
+      toolLogFromRun = result.toolLog || null;
+    } else {
+      result = await generateAI(finalPrompt, model, temperature, maxTokens, videoSettings, audioSettings, userId);
+
+      // Deduct credits after successful generation
+      if (result.success) {
+        const deductResult = await deductCredits(userId, creditCost);
+        if (!deductResult.success) {
+          console.warn('Failed to deduct credits:', deductResult.error);
+        } else if (subscriptionData?.credits) {
           subscriptionData.credits.current = deductResult.remainingCredits;
         }
       }
@@ -914,7 +988,8 @@ export async function runCell({
       temperature,
       type: getModelType(model),
       status: 'completed', // Status: 'pending', 'running', 'completed', 'error'
-      timestamp: pendingGeneration.timestamp // Keep original timestamp
+      timestamp: pendingGeneration.timestamp, // Keep original timestamp
+      ...(toolLogFromRun && toolLogFromRun.length ? { toolLog: toolLogFromRun } : {})
     };
     
     // Log if we're saving with Firebase URL or original URL

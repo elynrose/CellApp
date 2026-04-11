@@ -23,6 +23,29 @@ const UserProfile = ({ user, onClose }) => {
     const [uploadingPhoto, setUploadingPhoto] = useState(false);
     const [hadApiKey, setHadApiKey] = useState(false); // Track if API key existed originally
 
+    const integrationFieldKeys = [
+        'tavilyApiKey',
+        'sendgridApiKey',
+        'emailFrom',
+        'smtpHost',
+        'smtpPort',
+        'smtpUser',
+        'smtpPass',
+        'smtpFrom',
+        'telegramBotToken',
+        'telegramDefaultChatId',
+        'twilioAccountSid',
+        'twilioAuthToken',
+        'twilioFromNumber'
+    ];
+    const [integrationForm, setIntegrationForm] = useState(() =>
+        Object.fromEntries(integrationFieldKeys.map((k) => [k, '']))
+    );
+    const [hadIntegration, setHadIntegration] = useState(() =>
+        Object.fromEntries(integrationFieldKeys.map((k) => [k, false]))
+    );
+    const [showIntegrationSecrets, setShowIntegrationSecrets] = useState(false);
+
     useEffect(() => {
         if (user) {
             loadProfile();
@@ -44,6 +67,27 @@ const UserProfile = ({ user, onClose }) => {
                 const hasApiKey = !!profile.openaiApiKey;
                 setHadApiKey(hasApiKey); // Track if API key existed
                 setOpenaiApiKey(hasApiKey ? '•'.repeat(20) : ''); // Mask API key
+
+                const sec = profile.integrationSecrets || {};
+                const nextForm = {};
+                const nextHad = {};
+                integrationFieldKeys.forEach((k) => {
+                    const v = sec[k];
+                    const isSecret =
+                        k.includes('ApiKey') ||
+                        k.includes('Token') ||
+                        k === 'smtpPass' ||
+                        k === 'twilioAuthToken';
+                    if (v != null && String(v).length > 0) {
+                        nextForm[k] = isSecret ? '•'.repeat(20) : String(v);
+                        nextHad[k] = true;
+                    } else {
+                        nextForm[k] = '';
+                        nextHad[k] = false;
+                    }
+                });
+                setIntegrationForm((prev) => ({ ...prev, ...nextForm }));
+                setHadIntegration((prev) => ({ ...prev, ...nextHad }));
             }
         } catch (err) {
             setError(err.message);
@@ -105,14 +149,28 @@ const UserProfile = ({ user, onClose }) => {
                 apiKeyUpdate = { openaiApiKey: openaiApiKey.trim() };
             }
             // If it's still masked, don't include it (no change)
-            
+
+            const integrationUpdates = {};
+            integrationFieldKeys.forEach((k) => {
+                const val = integrationForm[k];
+                const masked = typeof val === 'string' && val.startsWith('•');
+                const empty = !val || (typeof val === 'string' && val.trim() === '');
+                if (empty && hadIntegration[k]) {
+                    integrationUpdates[`integrationSecrets.${k}`] = deleteField();
+                } else if (!empty && !masked) {
+                    integrationUpdates[`integrationSecrets.${k}`] =
+                        k === 'smtpPort' ? (parseInt(val, 10) || '') : String(val).trim();
+                }
+            });
+
             const profileData = {
                 firstName: firstName.trim(),
                 lastName: lastName.trim(),
                 phoneNumber: phoneNumber.trim(),
                 address: address.trim(),
                 profilePhotoUrl: profilePhotoUrl,
-                ...apiKeyUpdate
+                ...apiKeyUpdate,
+                ...integrationUpdates
             };
 
             const result = await updateUserProfile(user.uid, profileData);
@@ -305,6 +363,185 @@ const UserProfile = ({ user, onClose }) => {
                         <p className="text-xs text-gray-500 mt-1">
                             If provided, your API key will be used instead of the default one. Credits will not be deducted when using your own API key (Pro subscription required).
                         </p>
+                    </div>
+
+                    <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
+                        <div className="flex items-center justify-between mb-3">
+                            <h3 className="text-sm font-semibold text-gray-900 dark:text-white">
+                                Integrations (card tools)
+                            </h3>
+                            <button
+                                type="button"
+                                onClick={() => setShowIntegrationSecrets(!showIntegrationSecrets)}
+                                className="text-xs text-blue-600 dark:text-blue-400"
+                            >
+                                {showIntegrationSecrets ? 'Hide secrets' : 'Show values'}
+                            </button>
+                        </div>
+                        <p className="text-xs text-gray-500 mb-4">
+                            Stored only in your account. Used when a card has Tools enabled (Tavily research, SendGrid/SMTP email, Telegram, Twilio SMS). Clear a field and save to remove a key.
+                        </p>
+                        <div className="space-y-3 text-sm">
+                            <div>
+                                <label className="block text-gray-700 dark:text-gray-300 mb-1">Tavily API key</label>
+                                <input
+                                    type={showIntegrationSecrets ? 'text' : 'password'}
+                                    value={integrationForm.tavilyApiKey}
+                                    onChange={(e) =>
+                                        setIntegrationForm((p) => ({ ...p, tavilyApiKey: e.target.value }))
+                                    }
+                                    className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg"
+                                    placeholder="tvly-..."
+                                />
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-gray-700 dark:text-gray-300 mb-1">SendGrid API key</label>
+                                    <input
+                                        type={showIntegrationSecrets ? 'text' : 'password'}
+                                        value={integrationForm.sendgridApiKey}
+                                        onChange={(e) =>
+                                            setIntegrationForm((p) => ({ ...p, sendgridApiKey: e.target.value }))
+                                        }
+                                        className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-gray-700 dark:text-gray-300 mb-1">Default From (email)</label>
+                                    <input
+                                        type="email"
+                                        value={integrationForm.emailFrom}
+                                        onChange={(e) =>
+                                            setIntegrationForm((p) => ({ ...p, emailFrom: e.target.value }))
+                                        }
+                                        className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg"
+                                        placeholder="you@company.com"
+                                    />
+                                </div>
+                            </div>
+                            <p className="text-xs text-gray-500">Or configure SMTP instead of SendGrid:</p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-gray-700 dark:text-gray-300 mb-1">SMTP host</label>
+                                    <input
+                                        type="text"
+                                        value={integrationForm.smtpHost}
+                                        onChange={(e) =>
+                                            setIntegrationForm((p) => ({ ...p, smtpHost: e.target.value }))
+                                        }
+                                        className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-gray-700 dark:text-gray-300 mb-1">SMTP port</label>
+                                    <input
+                                        type="number"
+                                        value={integrationForm.smtpPort}
+                                        onChange={(e) =>
+                                            setIntegrationForm((p) => ({ ...p, smtpPort: e.target.value }))
+                                        }
+                                        className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg"
+                                        placeholder="587"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-gray-700 dark:text-gray-300 mb-1">SMTP user</label>
+                                    <input
+                                        type="text"
+                                        value={integrationForm.smtpUser}
+                                        onChange={(e) =>
+                                            setIntegrationForm((p) => ({ ...p, smtpUser: e.target.value }))
+                                        }
+                                        className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-gray-700 dark:text-gray-300 mb-1">SMTP password</label>
+                                    <input
+                                        type={showIntegrationSecrets ? 'text' : 'password'}
+                                        value={integrationForm.smtpPass}
+                                        onChange={(e) =>
+                                            setIntegrationForm((p) => ({ ...p, smtpPass: e.target.value }))
+                                        }
+                                        className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg"
+                                    />
+                                </div>
+                                <div className="md:col-span-2">
+                                    <label className="block text-gray-700 dark:text-gray-300 mb-1">SMTP From</label>
+                                    <input
+                                        type="email"
+                                        value={integrationForm.smtpFrom}
+                                        onChange={(e) =>
+                                            setIntegrationForm((p) => ({ ...p, smtpFrom: e.target.value }))
+                                        }
+                                        className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg"
+                                    />
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-gray-700 dark:text-gray-300 mb-1">Telegram bot token</label>
+                                    <input
+                                        type={showIntegrationSecrets ? 'text' : 'password'}
+                                        value={integrationForm.telegramBotToken}
+                                        onChange={(e) =>
+                                            setIntegrationForm((p) => ({ ...p, telegramBotToken: e.target.value }))
+                                        }
+                                        className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-gray-700 dark:text-gray-300 mb-1">Telegram default chat ID</label>
+                                    <input
+                                        type="text"
+                                        value={integrationForm.telegramDefaultChatId}
+                                        onChange={(e) =>
+                                            setIntegrationForm((p) => ({
+                                                ...p,
+                                                telegramDefaultChatId: e.target.value
+                                            }))
+                                        }
+                                        className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg"
+                                    />
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-gray-700 dark:text-gray-300 mb-1">Twilio Account SID</label>
+                                    <input
+                                        type="text"
+                                        value={integrationForm.twilioAccountSid}
+                                        onChange={(e) =>
+                                            setIntegrationForm((p) => ({ ...p, twilioAccountSid: e.target.value }))
+                                        }
+                                        className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-gray-700 dark:text-gray-300 mb-1">Twilio Auth Token</label>
+                                    <input
+                                        type={showIntegrationSecrets ? 'text' : 'password'}
+                                        value={integrationForm.twilioAuthToken}
+                                        onChange={(e) =>
+                                            setIntegrationForm((p) => ({ ...p, twilioAuthToken: e.target.value }))
+                                        }
+                                        className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg"
+                                    />
+                                </div>
+                                <div className="md:col-span-2">
+                                    <label className="block text-gray-700 dark:text-gray-300 mb-1">Twilio From (E.164)</label>
+                                    <input
+                                        type="text"
+                                        value={integrationForm.twilioFromNumber}
+                                        onChange={(e) =>
+                                            setIntegrationForm((p) => ({ ...p, twilioFromNumber: e.target.value }))
+                                        }
+                                        className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg"
+                                        placeholder="+15551234567"
+                                    />
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 

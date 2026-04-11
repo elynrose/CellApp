@@ -32,7 +32,8 @@
     "react-router-dom": "^7.10.1",
     "react-zoom-pan-pinch": "^3.7.0",
     "recharts": "^3.5.1",
-    "sqlite3": "^5.1.7"
+    "sqlite3": "^5.1.7",
+    "nodemailer": "^6.9.16"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^5.0.0",

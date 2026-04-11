@@ -34,6 +34,14 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
     const [elseValue, setElseValue] = useState('');
     const [thenValueType, setThenValueType] = useState('cell'); // 'cell' or 'text'
     const [elseValueType, setElseValueType] = useState('cell'); // 'cell' or 'text'
+    const [enableTools, setEnableTools] = useState(cell?.enableTools ?? false);
+    const [enabledTools, setEnabledTools] = useState(() => ({
+        tavily: !!cell?.enabledTools?.tavily,
+        email: !!cell?.enabledTools?.email,
+        telegram: !!cell?.enabledTools?.telegram,
+        twilioSms: !!cell?.enabledTools?.twilioSms,
+        ...(cell?.enabledTools || {})
+    }));
 
     useEffect(() => {
         if (isOpen) {
@@ -62,6 +70,14 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
             const newAudioSpeed = cell.audioSpeed ?? 1.0;
             const newAudioFormat = cell.audioFormat || 'mp3';
             const newCondition = cell.condition || '';
+            const newEnableTools = cell.enableTools ?? false;
+            const newEnabledTools = {
+                tavily: !!cell.enabledTools?.tavily,
+                email: !!cell.enabledTools?.email,
+                telegram: !!cell.enabledTools?.telegram,
+                twilioSms: !!cell.enabledTools?.twilioSms,
+                ...(cell.enabledTools || {})
+            };
 
             // Use functional updates to only set if changed
             setModel(prev => prev !== newModel ? newModel : prev);
@@ -79,8 +95,10 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
             setAudioSpeed(prev => prev !== newAudioSpeed ? newAudioSpeed : prev);
             setAudioFormat(prev => prev !== newAudioFormat ? newAudioFormat : prev);
             setCondition(prev => prev !== newCondition ? newCondition : prev);
+            setEnableTools(prev => prev !== newEnableTools ? newEnableTools : prev);
+            setEnabledTools(prev => JSON.stringify(prev) !== JSON.stringify(newEnabledTools) ? newEnabledTools : prev);
         }
-    }, [cell?.cell_id, cell?.model, cell?.temperature, cell?.autoRun, cell?.interval, cell?.prompt, cell?.cellPrompt, cell?.characterLimit, cell?.outputFormat, cell?.videoSeconds, cell?.videoResolution, cell?.videoAspectRatio, cell?.audioVoice, cell?.audioSpeed, cell?.audioFormat]);
+    }, [cell?.cell_id, cell?.model, cell?.temperature, cell?.autoRun, cell?.enableTools, cell?.enabledTools, cell?.interval, cell?.prompt, cell?.cellPrompt, cell?.characterLimit, cell?.outputFormat, cell?.videoSeconds, cell?.videoResolution, cell?.videoAspectRatio, cell?.audioVoice, cell?.audioSpeed, cell?.audioFormat]);
 
     const loadModels = async () => {
         try {
@@ -115,7 +133,14 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
             audioVoice: audioVoice || 'alloy',
             audioSpeed: audioSpeed ?? 1.0,
             audioFormat: audioFormat || 'mp3',
-            output: cell?.output || ''
+            output: cell?.output || '',
+            enableTools: enableTools ?? false,
+            enabledTools: {
+                tavily: !!enabledTools.tavily,
+                email: !!enabledTools.email,
+                telegram: !!enabledTools.telegram,
+                twilioSms: !!enabledTools.twilioSms
+            }
         };
         onSave(updated);
         onClose();
@@ -424,6 +449,42 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
                                 0 = disabled
                             </p>
                         </div>
+                    </div>
+                    <div className="border border-gray-700 rounded-lg p-3 space-y-2">
+                        <label className="flex items-center gap-2">
+                            <input
+                                type="checkbox"
+                                checked={enableTools}
+                                onChange={(e) => setEnableTools(e.target.checked)}
+                                className="rounded"
+                            />
+                            <span className="text-sm font-medium">Tools (text models)</span>
+                        </label>
+                        <p className="text-xs text-gray-400">
+                            When enabled, the model can call integrations you configured in Profile. Add API keys there first.
+                        </p>
+                        {enableTools && (
+                            <div className="grid grid-cols-2 gap-2 pt-1">
+                                {[
+                                    { key: 'tavily', label: 'Tavily (research)' },
+                                    { key: 'email', label: 'Email (SendGrid/SMTP)' },
+                                    { key: 'telegram', label: 'Telegram' },
+                                    { key: 'twilioSms', label: 'SMS (Twilio)' }
+                                ].map(({ key, label }) => (
+                                    <label key={key} className="flex items-center gap-2 text-sm">
+                                        <input
+                                            type="checkbox"
+                                            checked={!!enabledTools[key]}
+                                            onChange={(e) =>
+                                                setEnabledTools((prev) => ({ ...prev, [key]: e.target.checked }))
+                                            }
+                                            className="rounded"
+                                        />
+                                        {label}
+                                    </label>
+                                ))}
+                            </div>
+                        )}
                     </div>
                     <div>
                         <label className="block text-sm mb-1">Cell Prompt Template</label>
