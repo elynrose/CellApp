@@ -788,14 +788,29 @@ export async function getUserProfile(userId) {
 }
 
 /**
- * Update user profile
+ * Drop undefined so Firestore does not reject / skip fields inconsistently.
+ */
+function omitUndefined(obj) {
+  if (!obj || typeof obj !== 'object') return {};
+  return Object.fromEntries(
+    Object.entries(obj).filter(([, v]) => v !== undefined)
+  );
+}
+
+/**
+ * Update user profile (creates `users/{userId}` if missing — updateDoc alone fails without a doc).
  */
 export async function updateUserProfile(userId, profileData) {
   try {
-    await updateDoc(doc(db, 'users', userId), {
-      ...profileData,
-      updatedAt: serverTimestamp()
-    });
+    const payload = omitUndefined(profileData);
+    await setDoc(
+      doc(db, 'users', userId),
+      {
+        ...payload,
+        updatedAt: serverTimestamp()
+      },
+      { merge: true }
+    );
     return { success: true };
   } catch (error) {
     return { success: false, error: error.message };

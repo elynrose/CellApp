@@ -101,7 +101,40 @@ export async function signInWithGoogle() {
 export async function signIn(email, password) {
   try {
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
-    return { success: true, user: userCredential.user };
+    const user = userCredential.user;
+
+    // Match Google flow: ensure Firestore user doc exists (updateDoc on profile would fail otherwise).
+    const userDoc = await getDoc(doc(db, 'users', user.uid));
+    if (!userDoc.exists()) {
+      await setDoc(
+        doc(db, 'users', user.uid),
+        {
+          email: user.email,
+          displayName: user.displayName || '',
+          createdAt: new Date(),
+          subscription: 'free',
+          subscriptionStatus: 'active',
+          role: 'user',
+          isAdmin: false,
+          credits: {
+            current: 50,
+            total: 50,
+            lastReset: new Date(),
+            nextReset: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+          },
+          stripeCustomerId: null,
+          stripeSubscriptionId: null,
+          usage: {
+            apiCalls: 0,
+            storageUsed: 0,
+            sheetsCreated: 0
+          }
+        },
+        { merge: true }
+      );
+    }
+
+    return { success: true, user };
   } catch (error) {
     return { success: false, error: error.message };
   }

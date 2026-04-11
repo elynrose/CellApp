@@ -59,6 +59,9 @@ async function main() {
 
   // 2) User docs: owner can update profile fields, but cannot update privileged fields
   await assertSucceeds(alice.doc('users/alice').update({ displayName: 'Alice' }));
+  await assertSucceeds(
+    alice.doc('users/alice').set({ openaiApiKey: 'sk-test', providerApiKeys: { gemini: 'g' } }, { merge: true })
+  );
   await assertFails(alice.doc('users/alice').update({ role: 'admin' }));
   await assertFails(alice.doc('users/alice').update({ isAdmin: true }));
   await assertFails(alice.doc('users/alice').update({ subscription: 'pro' }));
