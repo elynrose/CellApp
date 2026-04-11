@@ -17,6 +17,31 @@ import TemplateModal from './components/TemplateModal';
 import UserProfile from './components/UserProfile';
 import GenerationSelectModal from './components/GenerationSelectModal';
 
+const orchestratorReportStorageKey = (userId, projectId, sheetId) =>
+  `orchestratorRun_${userId}_${projectId}_${sheetId}`;
+
+function formatOrchestratorEventForPdf(ev) {
+  if (!ev || typeof ev !== 'object') return String(ev);
+  switch (ev.type) {
+    case 'plan_start':
+      return `Plan round ${ev.round}/${ev.maxPhases}`;
+    case 'done':
+      return `Planner: goal complete — ${ev.reason || ''}`.trim();
+    case 'resolve':
+      return `Resolve phase ${ev.round}: ${ev.instruction || ''}`.trim();
+    case 'phase_ready':
+      return `Template ready: ${ev.templateName || ev.templateId || '—'} (${ev.templateId || ''})`.trim();
+    case 'applying':
+      return `Applying phase ${ev.phase}/${ev.total}: ${ev.templateName || ''}`.trim();
+    default:
+      try {
+        return JSON.stringify(ev);
+      } catch {
+        return String(ev.type || '');
+      }
+  }
+}
+
 function App() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
@@ -46,6 +71,8 @@ function App() {
   const [orchestratorRunning, setOrchestratorRunning] = useState(false);
   const [orchestratorMaxPhases, setOrchestratorMaxPhases] = useState(5);
   const [orchestratorHandoffLog, setOrchestratorHandoffLog] = useState([]);
+  /** Last successful orchestrator run on this sheet (for PDF + reload); persisted in sessionStorage */
+  const [orchestratorRunReport, setOrchestratorRunReport] = useState(null);
 
   // Auto-dismiss notifications after 8 seconds
   useEffect(() => {
@@ -180,6 +207,27 @@ function App() {
   useEffect(() => {
     if (user && currentProjectId && activeSheet) {
       loadCells(user.uid, currentProjectId, activeSheet.id);
+    }
+  }, [user, currentProjectId, activeSheet]);
+
+  // Restore last orchestrator run report for this sheet (session-only)
+  useEffect(() => {
+    if (!user || !currentProjectId || !activeSheet) {
+      setOrchestratorRunReport(null);
+      return;
+    }
+    try {
+      const raw = sessionStorage.getItem(
+        orchestratorReportStorageKey(user.uid, currentProjectId, activeSheet.id)
+      );
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        setOrchestratorRunReport(parsed && typeof parsed === 'object' ? parsed : null);
+      } else {
+        setOrchestratorRunReport(null);
+      }
+    } catch {
+      setOrchestratorRunReport(null);
     }
   }, [user, currentProjectId, activeSheet]);
 
@@ -1453,6 +1501,7 @@ function App() {
     }
 
     setOrchestratorRunning(true);
+    const runEvents = [];
     try {
       const hadCells = Object.keys(cells).length > 0;
       if (hadCells) {
@@ -1472,6 +1521,7 @@ function App() {
       const pipeline = await runOrchestratorHandoffPipeline(goal, availableModels, {
         maxPhases,
         onProgress: (ev) => {
+          runEvents.push(ev);
           setOrchestratorHandoffLog((prev) => [...prev, ev]);
         }
       });
@@ -1530,6 +1580,35 @@ function App() {
       });
       setShowOrchestratorModal(false);
       setOrchestratorPrompt('');
+
+      const phaseSummaries = phases.map((p, idx) => ({
+        phase: idx + 1,
+        instruction: p.instruction,
+        templateId: p.template?.id,
+        templateName: p.template?.name,
+        source: p.source,
+        matchReason: p.matchReason,
+        plannerReason: p.plannerReason
+      }));
+      const report = {
+        goal,
+        completedAt: new Date().toISOString(),
+        finished: pipeline.finished === true,
+        stopReason: pipeline.stopReason,
+        summary: pipeline.summary,
+        maxPhases,
+        phases: phaseSummaries,
+        progressEvents: [...runEvents]
+      };
+      try {
+        sessionStorage.setItem(
+          orchestratorReportStorageKey(user.uid, currentProjectId, activeSheet.id),
+          JSON.stringify(report)
+        );
+      } catch {
+        // ignore quota / private mode
+      }
+      setOrchestratorRunReport(report);
       setOrchestratorHandoffLog([]);
     } catch (e) {
       setNotification({
@@ -1899,6 +1978,81 @@ function App() {
           });
         }
       });
+
+      // Orchestrator activity (planning log + phase templates) when this sheet was built via Orchestrator
+      const orchReport = orchestratorRunReport;
+      if (
+        orchReport &&
+        activeSheet &&
+        orchReport.phases &&
+        Array.isArray(orchReport.phases) &&
+        orchReport.phases.length > 0
+      ) {
+        checkPageBreak(40);
+        yPos += 8;
+        doc.setDrawColor(180, 180, 180);
+        doc.line(margin, yPos, pageWidth - margin, yPos);
+        yPos += 12;
+
+        addText('ORCHESTRATOR ACTIVITY', 16, true, [0, 80, 120]);
+        const goalLine =
+          typeof orchReport.goal === 'string' && orchReport.goal.trim()
+            ? orchReport.goal.trim()
+            : '(no goal text stored)';
+        addText(`Main goal: ${goalLine}`, 10, false, [0, 0, 0]);
+        if (orchReport.completedAt) {
+          try {
+            addText(
+              `Orchestrator completed: ${new Date(orchReport.completedAt).toLocaleString()}`,
+              9,
+              false,
+              [100, 100, 100]
+            );
+          } catch {
+            addText(`Orchestrator completed: ${orchReport.completedAt}`, 9, false, [100, 100, 100]);
+          }
+        }
+        const statusBits = [
+          orchReport.finished ? 'finished' : 'not finished',
+          orchReport.stopReason ? `stop: ${orchReport.stopReason}` : ''
+        ]
+          .filter(Boolean)
+          .join(' · ');
+        if (statusBits) addText(statusBits, 9, false, [100, 100, 100]);
+        if (orchReport.summary) {
+          addText(`Summary: ${orchReport.summary}`, 10, false, [0, 0, 0]);
+        }
+        yPos += 5;
+
+        addText('Phases (templates applied)', 12, true, [50, 50, 150]);
+        orchReport.phases.forEach((ph, i) => {
+          checkPageBreak(28);
+          const title = ph.templateName || ph.templateId || `Phase ${i + 1}`;
+          addText(
+            `Phase ${ph.phase != null ? ph.phase : i + 1}: ${title}`,
+            11,
+            true,
+            [0, 0, 0]
+          );
+          if (ph.instruction) addText(`Instruction: ${ph.instruction}`, 9, false, [0, 0, 0]);
+          if (ph.templateId) addText(`Template ID: ${ph.templateId}`, 8, false, [120, 120, 120]);
+          if (ph.source) addText(`Source: ${ph.source}`, 8, false, [120, 120, 120]);
+          if (ph.matchReason) addText(`Template match: ${ph.matchReason}`, 8, false, [120, 120, 120]);
+          if (ph.plannerReason) addText(`Planner note: ${ph.plannerReason}`, 8, false, [120, 120, 120]);
+          yPos += 4;
+        });
+
+        const evs = orchReport.progressEvents;
+        if (Array.isArray(evs) && evs.length > 0) {
+          checkPageBreak(24);
+          addText('Planning & execution log', 12, true, [50, 50, 150]);
+          evs.forEach((ev) => {
+            const line = formatOrchestratorEventForPdf(ev);
+            if (line) addText(`• ${line}`, 9, false, [60, 60, 60]);
+          });
+        }
+        yPos += 5;
+      }
 
       // Footer
       const totalPages = doc.internal.pages.length - 1;
