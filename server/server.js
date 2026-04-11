@@ -1722,8 +1722,12 @@ const server = http.createServer(async (req, res) => {
   try {
     // Parse URL to get pathname (ignores query parameters)
     const parsedUrl = url.parse(req.url || '/');
-    const pathname = parsedUrl.pathname || '/';
-    
+    let pathname = parsedUrl.pathname || '/';
+    // Avoid 405 on /api/llm/ vs /api/llm (proxies and some clients add trailing slashes)
+    if (pathname.length > 1 && pathname.endsWith('/')) {
+      pathname = pathname.replace(/\/+$/, '');
+    }
+
     // Get client IP for rate limiting
     const clientIP = req.connection.remoteAddress || req.socket.remoteAddress || 'unknown';
 
@@ -1977,7 +1981,7 @@ window.storage = storage;`;
     }
 
     // Diagnostic endpoint for Firebase models
-    if (req.url === '/api/models/diagnose') {
+    if (pathname === '/api/models/diagnose' && req.method === 'GET') {
       try {
         const diagnosis = await diagnoseFirebaseModels();
         res.statusCode = 200;
@@ -1992,7 +1996,7 @@ window.storage = storage;`;
     }
 
     // Handle API endpoints
-    if (req.url === '/api/models') {
+    if (pathname === '/api/models' && req.method === 'GET') {
       try {
         const models = await getAvailableModels();
         res.statusCode = 200;
@@ -2007,7 +2011,7 @@ window.storage = storage;`;
     }
 
     // Database API endpoints
-    if (req.url === '/api/sheets') {
+    if (pathname === '/api/sheets' && req.method === 'GET') {
       try {
         const sheets = await getSheets();
         res.statusCode = 200;
@@ -2045,7 +2049,7 @@ window.storage = storage;`;
       return;
     }
 
-    if (req.url === '/api/sheets' && req.method === 'POST') {
+    if (pathname === '/api/sheets' && req.method === 'POST') {
       let body = '';
       req.on('data', chunk => { body += chunk; });
       req.on('end', async () => {
@@ -2120,7 +2124,7 @@ window.storage = storage;`;
       return;
     }
 
-    if (req.url === '/api/save-cell' && req.method === 'POST') {
+    if (pathname === '/api/save-cell' && req.method === 'POST') {
       let body = '';
       req.on('data', chunk => { body += chunk; });
       req.on('end', async () => {
@@ -2150,7 +2154,7 @@ window.storage = storage;`;
 
 
 
-    if (req.url === '/api/connections' && req.method === 'POST') {
+    if (pathname === '/api/connections' && req.method === 'POST') {
       let body = '';
       req.on('data', chunk => { body += chunk; });
       req.on('end', async () => {
@@ -2276,7 +2280,7 @@ window.storage = storage;`;
       return;
     }
 
-    if (req.url === '/api/stripe/webhook' && req.method === 'POST') {
+    if (pathname === '/api/stripe/webhook' && req.method === 'POST') {
       if (!stripe) {
         handleError(res, 500, 'Stripe not configured');
         return;
@@ -2495,7 +2499,7 @@ window.storage = storage;`;
       return;
     }
 
-    if (req.url === '/api/update-sheet-dimensions' && req.method === 'POST') {
+    if (pathname === '/api/update-sheet-dimensions' && req.method === 'POST') {
       let body = '';
       req.on('data', chunk => { body += chunk; });
       req.on('end', async () => {
@@ -3692,8 +3696,15 @@ window.storage = storage;`;
 
     // For any other methods or routes, return 405 Method Not Allowed
     res.statusCode = 405;
-    res.setHeader('Content-Type', 'text/plain');
-    res.end('Method Not Allowed');
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.end(
+      JSON.stringify({
+        error: 'Method Not Allowed',
+        method: req.method,
+        path: pathname
+      })
+    );
   } catch (error) {
     handleError(res, 500, 'Internal server error', error);
   }
