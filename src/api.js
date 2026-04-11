@@ -129,7 +129,8 @@ export async function generateAI(
         // ... rest of the code
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-          throw new Error(errorData.error || `API error: ${response.status}`);
+          const detail = errorData.details ? ` ${errorData.details}` : '';
+          throw new Error((errorData.error || `API error: ${response.status}`) + detail);
         }
         const data = await response.json();
         return { success: true, output: data.text || data.output || '' };
@@ -147,7 +148,8 @@ export async function generateAI(
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-      throw new Error(errorData.error || `API error: ${response.status}`);
+      const detail = errorData.details ? ` ${errorData.details}` : '';
+      throw new Error((errorData.error || `API error: ${response.status}`) + detail);
     }
 
     const data = await response.json();

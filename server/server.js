@@ -34,6 +34,42 @@ const { initializeFirebase, getOpenAIApiKey, getGeminiApiKey, getActiveModelsFro
 const admin = require('firebase-admin');
 
 /**
+ * Trim and strip common copy-paste issues (Bearer prefix, smart quotes, wrapping quotes).
+ * Double "Bearer Bearer ..." breaks OpenAI and yields 401.
+ */
+function normalizeApiKeyString(raw) {
+  if (raw == null) return null;
+  let s = String(raw).trim();
+  if (!s) return null;
+  if (/^bearer\s+/i.test(s)) {
+    s = s.replace(/^bearer\s+/i, '').trim();
+  }
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    s = s.slice(1, -1).trim();
+  }
+  return s || null;
+}
+
+function normalizeProviderApiKeys(raw) {
+  if (!raw || typeof raw !== 'object') return {};
+  const out = { ...raw };
+  for (const k of ['openrouter', 'grok', 'gemini', 'fal']) {
+    if (out[k] != null && typeof out[k] === 'string') {
+      const n = normalizeApiKeyString(out[k]);
+      out[k] = n || '';
+    }
+  }
+  if (out.lmStudio && typeof out.lmStudio === 'object') {
+    out.lmStudio = { ...out.lmStudio };
+    if (out.lmStudio.apiKey != null && typeof out.lmStudio.apiKey === 'string') {
+      const n = normalizeApiKeyString(out.lmStudio.apiKey);
+      out.lmStudio.apiKey = n || '';
+    }
+  }
+  return out;
+}
+
+/**
  * Get user's API key and check subscription
  */
 async function getUserApiKeyAndSubscription(userId) {
@@ -50,15 +86,16 @@ async function getUserApiKeyAndSubscription(userId) {
     }
     
     const userData = userDoc.data();
-    const userApiKey = userData.openaiApiKey;
+    const openaiRaw = userData.openaiApiKey || userData.providerApiKeys?.openai;
+    const userApiKey = normalizeApiKeyString(openaiRaw);
     const subscription = userData.subscription || 'free';
     const isPro = subscription === 'pro' || subscription === 'enterprise';
     
-    const providerApiKeys = userData.providerApiKeys || {};
+    const providerApiKeys = normalizeProviderApiKeys(userData.providerApiKeys || {});
 
     return {
-      hasUserApiKey: !!userApiKey && String(userApiKey).trim() !== '',
-      apiKey: userApiKey ? String(userApiKey).trim() : null,
+      hasUserApiKey: !!userApiKey,
+      apiKey: userApiKey,
       isPro,
       providerApiKeys
     };
@@ -75,14 +112,12 @@ async function getUserApiKeyAndSubscription(userId) {
 async function getPooledOpenAIApiKey() {
   try {
     const k = await getOpenAIApiKey();
-    if (k && String(k).trim()) {
-      return String(k).trim();
-    }
+    const n = normalizeApiKeyString(k);
+    if (n) return n;
   } catch (e) {
     // fall through to env
   }
-  const env = process.env.OPENAI_API_KEY;
-  return env && String(env).trim() ? String(env).trim() : null;
+  return normalizeApiKeyString(process.env.OPENAI_API_KEY);
 }
 
 /** Keep in sync with src/utils/modelProvider.js */
@@ -166,8 +201,9 @@ async function openAICompatibleChat(baseUrl, apiKey, model, prompt, temperature,
     body.max_tokens = maxTokens;
   }
   const headers = { ...extraHeaders };
-  if (apiKey && String(apiKey).trim()) {
-    headers.Authorization = `Bearer ${String(apiKey).trim()}`;
+  const nk = normalizeApiKeyString(apiKey);
+  if (nk) {
+    headers.Authorization = `Bearer ${nk}`;
   }
   const data = await postHttpsOrHttpJson(url, body, headers);
   const text = data.choices?.[0]?.message?.content || 'No response generated';
@@ -264,7 +300,7 @@ function isCloudDeployment() {
 }
 
 async function probeProviderApiKey(provider, apiKey, baseUrl) {
-  const k = typeof apiKey === 'string' ? apiKey.trim() : '';
+  const k = normalizeApiKeyString(apiKey) || '';
   const b = typeof baseUrl === 'string' ? baseUrl.trim() : '';
 
   if ((provider === 'lmstudio' || provider === 'ollama') && isProbablyLocalUrl(b || '') && isCloudDeployment()) {
@@ -890,12 +926,12 @@ async function makeAPIRequest(provider, endpoint, data = null, apiKey = null) {
     }
 
     // Get API key dynamically if not provided
-    let finalApiKey = apiKey;
+    let finalApiKey = normalizeApiKeyString(apiKey);
     if (!finalApiKey) {
       if (provider === 'gemini') {
-        finalApiKey = process.env.GEMINI_API_KEY;
+        finalApiKey = normalizeApiKeyString(process.env.GEMINI_API_KEY);
       } else {
-        finalApiKey = config.apiKey;
+        finalApiKey = normalizeApiKeyString(config.apiKey);
       }
     }
 
@@ -919,6 +955,8 @@ async function makeAPIRequest(provider, endpoint, data = null, apiKey = null) {
       headers: {
         'Authorization': `Bearer ${finalApiKey}`,
         'Content-Type': 'application/json',
+        'User-Agent': 'Cellulai/1.0 (https://github.com/elynrose/CellApp)',
+        Accept: 'application/json'
       }
     };
 
@@ -1283,6 +1321,8 @@ async function callHybridAI(model, prompt, temperature = 0.7, maxTokens = undefi
     } else {
       console.log(`ℹ️ No userId provided, using environment API key`);
     }
+
+    geminiApiKey = normalizeApiKeyString(geminiApiKey);
     
     // Normalize model name - fix common typos
     if (model) {
@@ -2964,10 +3004,23 @@ window.storage = storage;`;
             statusCode = 408; // Request Timeout
           }
 
+          let upstreamHint;
+          if (statusCode === 401 || statusCode === 429) {
+            upstreamHint = err.message?.substring(0, 600);
+          } else if (err.message?.includes('API Error') || err.message?.includes('HTTP ')) {
+            upstreamHint = err.message.substring(0, 400);
+          } else if (process.env.NODE_ENV === 'development') {
+            upstreamHint = err.message;
+          }
           res.statusCode = statusCode;
           res.setHeader('Content-Type', 'application/json');
           res.setHeader('Access-Control-Allow-Origin', '*');
-          res.end(JSON.stringify({ error: errorMessage, details: process.env.NODE_ENV === 'development' ? err.message : undefined }));
+          res.end(
+            JSON.stringify({
+              error: errorMessage,
+              details: upstreamHint
+            })
+          );
         }
       });
       return;
