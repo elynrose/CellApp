@@ -50,6 +50,33 @@ function normalizeApiKeyString(raw) {
   return s || null;
 }
 
+function trimOpenAIEnv(v) {
+  if (v == null) return '';
+  return String(v).trim();
+}
+
+/**
+ * Optional headers for multi-org accounts or legacy user keys.
+ * @see https://platform.openai.com/docs/api-reference/organizations-and-projects-optional
+ */
+function getOpenAIEnvHeaders() {
+  const h = {};
+  const org = trimOpenAIEnv(process.env.OPENAI_ORG_ID) || trimOpenAIEnv(process.env.OPENAI_ORGANIZATION);
+  if (org) h['OpenAI-Organization'] = org;
+  const project = trimOpenAIEnv(process.env.OPENAI_PROJECT_ID);
+  if (project) h['OpenAI-Project'] = project;
+  return h;
+}
+
+function buildOpenAIClientOptions(apiKey) {
+  const opts = { apiKey };
+  const org = trimOpenAIEnv(process.env.OPENAI_ORG_ID) || trimOpenAIEnv(process.env.OPENAI_ORGANIZATION);
+  if (org) opts.organization = org;
+  const project = trimOpenAIEnv(process.env.OPENAI_PROJECT_ID);
+  if (project) opts.project = project;
+  return opts;
+}
+
 function normalizeProviderApiKeys(raw) {
   if (!raw || typeof raw !== 'object') return {};
   const out = { ...raw };
@@ -315,7 +342,8 @@ async function probeProviderApiKey(provider, apiKey, baseUrl) {
     case 'openai': {
       if (!k) throw new Error('API key is required');
       const { status, body } = await httpOrHttpsGet('https://api.openai.com/v1/models?limit=5', {
-        Authorization: `Bearer ${k}`
+        Authorization: `Bearer ${k}`,
+        ...getOpenAIEnvHeaders()
       });
       if (status === 200) return { ok: true, message: 'OpenAI key is valid (listed models).' };
       if (status === 401) throw new Error('Invalid OpenAI API key (401).');
@@ -970,6 +998,7 @@ async function makeAPIRequest(provider, endpoint, data = null, apiKey = null) {
     } else {
       // OpenAI uses Bearer token
       options.headers['Authorization'] = `Bearer ${finalApiKey}`;
+      Object.assign(options.headers, getOpenAIEnvHeaders());
     }
 
     // Add timeout to prevent hanging requests
@@ -1126,7 +1155,8 @@ function pollVideoJobStatus(jobId, apiKey, resolve, reject, maxAttempts = 60, at
     method: 'GET',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
-      'OpenAI-Beta': 'sora-2' // Beta header for Sora 2
+      'OpenAI-Beta': 'sora-2', // Beta header for Sora 2
+      ...getOpenAIEnvHeaders()
     }
   };
   
@@ -1215,7 +1245,8 @@ function getVideoContent(jobId, apiKey, resolve, reject) {
     path: `/v1/videos/${jobId}/download`,
     method: 'GET',
     headers: {
-      'Authorization': `Bearer ${apiKey}`
+      'Authorization': `Bearer ${apiKey}`,
+      ...getOpenAIEnvHeaders()
     }
   };
 
@@ -1325,7 +1356,8 @@ async function callHybridAI(model, prompt, temperature = 0.7, maxTokens = undefi
     }
 
     geminiApiKey = normalizeApiKeyString(geminiApiKey);
-    
+    openaiApiKey = normalizeApiKeyString(openaiApiKey);
+
     // Normalize model name - fix common typos
     if (model) {
       model = model.replace(/gpt-3-5-turbo/g, 'gpt-3.5-turbo');
@@ -1481,9 +1513,7 @@ async function callHybridAI(model, prompt, temperature = 0.7, maxTokens = undefi
 
       // Use OpenAI SDK's videos.create method
       // The SDK should handle the correct endpoint automatically
-      const openai = new OpenAI({
-        apiKey: openaiApiKey
-      });
+      const openai = new OpenAI(buildOpenAIClientOptions(openaiApiKey));
 
       console.log(`🚀 Using OpenAI SDK videos.create with:`);
       console.log(`   Model: ${requestData.model}`);
@@ -2601,7 +2631,8 @@ window.storage = storage;`;
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${openaiApiKey}`,
-            'OpenAI-Beta': 'sora-2'
+            'OpenAI-Beta': 'sora-2',
+            ...getOpenAIEnvHeaders()
           }
         };
 
@@ -2676,7 +2707,8 @@ window.storage = storage;`;
                       method: 'GET',
                       headers: {
                         'Authorization': `Bearer ${openaiApiKey}`,
-                        'OpenAI-Beta': 'sora-2'
+                        'OpenAI-Beta': 'sora-2',
+                        ...getOpenAIEnvHeaders()
                       }
                     };
                     
@@ -3001,7 +3033,7 @@ window.storage = storage;`;
             statusCode = 429;
           } else if (err.message.includes('authentication') || err.message.includes('401')) {
             errorMessage =
-              'Authentication failed. For OpenAI, add your key under Profile or set Railway OPENAI_API_KEY. For Gemini, add Profile → API providers or GEMINI_API_KEY — and save after pasting.';
+              'Authentication failed. For OpenAI: add your key in Profile, set Railway OPENAI_API_KEY, or if you use multiple orgs / legacy keys set OPENAI_ORG_ID and optionally OPENAI_PROJECT_ID (see OpenAI dashboard). For Gemini: Profile → API providers or GEMINI_API_KEY.';
             statusCode = 401;
           } else if (err.message.includes('not found') || err.message.includes('404')) {
             errorMessage = err.message; // Use the specific error message
@@ -3103,6 +3135,7 @@ window.storage = storage;`;
             if (openaiApiKey) {
               requestOptions.headers['Authorization'] = `Bearer ${openaiApiKey}`;
               requestOptions.headers['OpenAI-Beta'] = 'sora-2';
+              Object.assign(requestOptions.headers, getOpenAIEnvHeaders());
               console.log(`🔑 Adding authentication for OpenAI content endpoint`);
             } else {
               res.statusCode = 500;
@@ -3303,7 +3336,8 @@ window.storage = storage;`;
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${openaiApiKey}`,
-            'OpenAI-Beta': 'sora-2'
+            'OpenAI-Beta': 'sora-2',
+            ...getOpenAIEnvHeaders()
           }
         };
         
