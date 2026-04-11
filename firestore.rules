@@ -48,6 +48,11 @@ service cloud.firestore {
       allow update: if isAdmin() || (isOwner(userId) && ownerIsNotChangingRestrictedUserFields());
       allow delete: if isAdmin() || isOwner(userId);
 
+      // Scheduled cell runs (cron) — owned documents for server-side worker
+      match /scheduleJobs/{jobId} {
+        allow read, create, update, delete: if isOwner(userId) || isAdmin();
+      }
+
       // Projects subcollection
       match /projects/{projectId} {
         allow read, create, update, delete: if isOwner(userId) || isAdmin();

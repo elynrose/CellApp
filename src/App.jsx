@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { onAuthStateChange, getCurrentUser } from './firebase/auth';
-import { getProjects, createProject, getSheets, createSheet, deleteSheet, updateSheet, getSheetCells, saveCell, getActiveModels, deleteCell, getUserSubscription } from './firebase/firestore';
+import { getProjects, createProject, getSheets, createSheet, deleteSheet, updateSheet, getSheetCells, saveCell, getActiveModels, deleteCell, getUserSubscription, subscribeToSheetCells, syncScheduleForCell } from './firebase/firestore';
 import { runCell, runCells, formatOutput, pollJobStatus, cancelPolling } from './services/cellExecution';
 import { parseDependencies, findDependentCells } from './utils/dependencies';
 import { getModelType } from './api';
@@ -74,6 +74,10 @@ function App() {
   const isProcessingAutoRunRef = useRef(false);
   // Track polling timeouts to allow cancellation
   const pollingTimeoutsRef = useRef({});
+  const cellsListenerUnsubRef = useRef(null);
+  const scheduledRunHandledRef = useRef({});
+  const pollJobStartedRef = useRef({});
+  const handleRunCellRef = useRef(null);
 
   // Initialize auth state
   useEffect(() => {
@@ -171,11 +175,66 @@ function App() {
     }
   }, [user, currentProjectId]);
 
-  // Load cells when sheet changes
+  // Realtime cells + initial load when sheet changes
   useEffect(() => {
-    if (user && currentProjectId && activeSheet) {
-      loadCells(user.uid, currentProjectId, activeSheet.id);
+    if (!user || !currentProjectId || !activeSheet) return;
+
+    if (cellsListenerUnsubRef.current) {
+      cellsListenerUnsubRef.current();
+      cellsListenerUnsubRef.current = null;
     }
+    scheduledRunHandledRef.current = {};
+
+    const userId = user.uid;
+    const projectId = currentProjectId;
+    const sheetId = activeSheet.id;
+
+    const unsub = subscribeToSheetCells(userId, projectId, sheetId, (result) => {
+      if (!result.success) return;
+
+      const cellsObj = {};
+      result.cells.forEach((cell) => {
+        const id = cell.cell_id;
+        cellsObj[id] = {
+          ...cell,
+          x: cell.x || 0,
+          y: cell.y || 0,
+          width: cell.width || 350,
+          height: cell.height || null,
+          model: cell.model || defaultModel,
+          temperature: cell.temperature ?? defaultTemperature,
+          generations: cell.generations || [],
+          status: cell.status || null,
+          jobId: cell.jobId || null
+        };
+      });
+
+      setCells(cellsObj);
+      cellsRef.current = cellsObj;
+
+      Object.entries(cellsObj).forEach(([cellId, cell]) => {
+        const trig = cell.scheduledRunTrigger || 0;
+        const prev = scheduledRunHandledRef.current[cellId];
+        if (prev === undefined) {
+          scheduledRunHandledRef.current[cellId] = trig;
+        } else if (trig > prev && cell.prompt?.trim()) {
+          scheduledRunHandledRef.current[cellId] = trig;
+          queueMicrotask(() => {
+            const run = handleRunCellRef.current;
+            if (run) run(cellId).catch(() => {});
+          });
+        } else if (trig !== prev) {
+          scheduledRunHandledRef.current[cellId] = trig;
+        }
+      });
+    });
+
+    cellsListenerUnsubRef.current = unsub;
+    return () => {
+      unsub();
+      cellsListenerUnsubRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, currentProjectId, activeSheet]);
 
   // Save active sheet to localStorage whenever it changes
@@ -321,102 +380,6 @@ function App() {
             await loadSheets(userId, projectId);
           }
         }
-      }
-    } catch (error) {
-    }
-  };
-
-  const loadCells = async (userId, projectId, sheetId) => {
-    try {
-      const result = await getSheetCells(userId, projectId, sheetId);
-      if (result.success) {
-        // Convert array to object for easier lookup
-        const cellsObj = {};
-        result.cells.forEach(cell => {
-          cellsObj[cell.cell_id] = {
-            ...cell,
-            x: cell.x || 0,
-            y: cell.y || 0,
-            width: cell.width || 350,
-            height: cell.height || null,
-            model: cell.model || defaultModel,
-            temperature: cell.temperature ?? defaultTemperature,
-            generations: cell.generations || [],
-            status: cell.status || null,
-            jobId: cell.jobId || null
-          };
-        });
-        setCells(cellsObj);
-
-        // Resume polling for cells with pending/running/queued status
-        Object.entries(cellsObj).forEach(([cellId, cell]) => {
-          const isActiveStatus = cell.status === 'pending' || 
-                                 cell.status === 'running' || 
-                                 cell.status === 'queued' || 
-                                 cell.status === 'processing' || 
-                                 cell.status === 'in_progress';
-          if (isActiveStatus && cell.jobId) {
-            pollJobStatus({
-              cellId,
-              cell,
-              jobId: cell.jobId,
-              userId,
-              projectId,
-              sheetId,
-              onProgress: ({ status, cellId: progressCellId, output, error, updatedCell }) => {
-                if (status === 'complete' && output) {
-                  // Ensure output is set in the cell state
-                  const finalOutput = updatedCell?.output || output;
-                  handleCellUpdate(progressCellId, undefined, finalOutput, updatedCell);
-                  
-                  // Also directly update cells state to ensure video URL is set immediately
-                  setCells(prev => ({
-                    ...prev,
-                    [progressCellId]: {
-                      ...prev[progressCellId],
-                      output: finalOutput,
-                      status: 'completed',
-                      ...(updatedCell || {})
-                    }
-                  }));
-                  cellsRef.current = {
-                    ...cellsRef.current,
-                    [progressCellId]: {
-                      ...cellsRef.current[progressCellId],
-                      output: finalOutput,
-                      status: 'completed',
-                      ...(updatedCell || {})
-                    }
-                  };
-                } else if (status === 'error') {
-                  handleCellUpdate(progressCellId, undefined, `Error: ${error}`, updatedCell);
-                } else if (status === 'polling' || status === 'running' || status === 'pending') {
-                  // Update status in cells during polling
-                  const newStatus = updatedCell?.status || status || 'running';
-                  setCells(prev => ({
-                    ...prev,
-                    [progressCellId]: {
-                      ...prev[progressCellId],
-                      status: newStatus,
-                      ...(updatedCell || {})
-                    }
-                  }));
-                  // Also update ref
-                  cellsRef.current = {
-                    ...cellsRef.current,
-                    [progressCellId]: {
-                      ...cellsRef.current[progressCellId],
-                      status: newStatus,
-                      ...(updatedCell || {})
-                    }
-                  };
-                }
-              }
-            });
-            // Store timeout reference for this cell's polling
-            pollingTimeoutsRef.current[cellId] = pollPromise;
-          }
-        });
       }
     } catch (error) {
     }
@@ -706,6 +669,7 @@ function App() {
       // Don't await - let it save in background so UI updates immediately
       saveCell(user.uid, currentProjectId, activeSheet.id, cellId, updatedCell).catch(error => {
       });
+      syncScheduleForCell(user.uid, currentProjectId, activeSheet.id, cellId, updatedCell).catch(() => {});
     }
 
     // Check for dependent cells with autoRun when output changes
@@ -1339,6 +1303,79 @@ function App() {
     }
   };
 
+  handleRunCellRef.current = handleRunCell;
+
+  useEffect(() => {
+    if (!user || !currentProjectId || !activeSheet) return;
+
+    Object.entries(cells).forEach(([cellId, cell]) => {
+      const isActiveStatus =
+        cell.status === 'pending' ||
+        cell.status === 'running' ||
+        cell.status === 'queued' ||
+        cell.status === 'processing' ||
+        cell.status === 'in_progress';
+      if (!isActiveStatus || !cell.jobId) return;
+
+      const key = `${cellId}:${cell.jobId}`;
+      if (pollJobStartedRef.current[key]) return;
+      pollJobStartedRef.current[key] = true;
+
+      pollJobStatus({
+        cellId,
+        cell,
+        jobId: cell.jobId,
+        userId: user.uid,
+        projectId: currentProjectId,
+        sheetId: activeSheet.id,
+        onProgress: ({ status, cellId: progressCellId, output, error, updatedCell }) => {
+          if (status === 'complete' && output) {
+            const finalOutput = updatedCell?.output || output;
+            handleCellUpdate(progressCellId, undefined, finalOutput, updatedCell);
+            setCells((prev) => ({
+              ...prev,
+              [progressCellId]: {
+                ...prev[progressCellId],
+                output: finalOutput,
+                status: 'completed',
+                ...(updatedCell || {})
+              }
+            }));
+            cellsRef.current = {
+              ...cellsRef.current,
+              [progressCellId]: {
+                ...cellsRef.current[progressCellId],
+                output: finalOutput,
+                status: 'completed',
+                ...(updatedCell || {})
+              }
+            };
+          } else if (status === 'error') {
+            handleCellUpdate(progressCellId, undefined, `Error: ${error}`, updatedCell);
+          } else if (status === 'polling' || status === 'running' || status === 'pending') {
+            const newStatus = updatedCell?.status || status || 'running';
+            setCells((prev) => ({
+              ...prev,
+              [progressCellId]: {
+                ...prev[progressCellId],
+                status: newStatus,
+                ...(updatedCell || {})
+              }
+            }));
+            cellsRef.current = {
+              ...cellsRef.current,
+              [progressCellId]: {
+                ...cellsRef.current[progressCellId],
+                status: newStatus,
+                ...(updatedCell || {})
+              }
+            };
+          }
+        }
+      });
+    });
+  }, [cells, user, currentProjectId, activeSheet]);
+
   const handleRunAllCells = async () => {
     if (!user || !currentProjectId || !activeSheet) return;
 
@@ -1431,6 +1468,10 @@ function App() {
       characterLimit: cellData.characterLimit !== undefined ? cellData.characterLimit : 0,
       outputFormat: cellData.outputFormat || '',
       autoRun: cellData.autoRun !== undefined ? cellData.autoRun : false,
+      interval: cellData.interval !== undefined ? cellData.interval : 0,
+      enableTools: cellData.enableTools ?? false,
+      enabledTools: cellData.enabledTools || { tavily: false, email: false, telegram: false, twilioSms: false },
+      schedule: cellData.schedule || null,
       name: cellData.name || '', // Display name/title - can be changed by user
       generations: []
     };
@@ -1439,6 +1480,7 @@ function App() {
 
     try {
       await saveCell(user.uid, currentProjectId, activeSheet.id, cellId, newCell);
+      await syncScheduleForCell(user.uid, currentProjectId, activeSheet.id, cellId, newCell);
       return cellId;
     } catch (error) {
       return null;
@@ -1540,6 +1582,10 @@ function App() {
           characterLimit: cellTemplate.characterLimit !== undefined ? cellTemplate.characterLimit : 0,
           outputFormat: cellTemplate.outputFormat || '',
           autoRun: cellTemplate.autoRun !== undefined ? cellTemplate.autoRun : false,
+          interval: cellTemplate.interval !== undefined ? cellTemplate.interval : 0,
+          enableTools: cellTemplate.enableTools ?? false,
+          enabledTools: cellTemplate.enabledTools || undefined,
+          schedule: cellTemplate.schedule || null,
           name: cellTemplate.name || ''
         }, cellId);
       }

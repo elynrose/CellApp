@@ -3,6 +3,7 @@ import { X, Code2, HelpCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { getActiveModels } from '../firebase/firestore';
 import ConditionBuilder from './ConditionBuilder';
+import { validateCronExpression } from '../utils/schedule';
 
 const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} }) => {
     const [model, setModel] = useState(cell?.model || 'gpt-3.5-turbo');
@@ -42,6 +43,8 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
         twilioSms: !!cell?.enabledTools?.twilioSms,
         ...(cell?.enabledTools || {})
     }));
+    const [cronExpression, setCronExpression] = useState(cell?.schedule?.cronExpression || '');
+    const [scheduleTimeZone, setScheduleTimeZone] = useState(cell?.schedule?.timeZone || 'UTC');
 
     useEffect(() => {
         if (isOpen) {
@@ -78,6 +81,8 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
                 twilioSms: !!cell.enabledTools?.twilioSms,
                 ...(cell.enabledTools || {})
             };
+            const newCron = cell.schedule?.cronExpression || '';
+            const newTz = cell.schedule?.timeZone || 'UTC';
 
             // Use functional updates to only set if changed
             setModel(prev => prev !== newModel ? newModel : prev);
@@ -97,8 +102,10 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
             setCondition(prev => prev !== newCondition ? newCondition : prev);
             setEnableTools(prev => prev !== newEnableTools ? newEnableTools : prev);
             setEnabledTools(prev => JSON.stringify(prev) !== JSON.stringify(newEnabledTools) ? newEnabledTools : prev);
+            setCronExpression(prev => prev !== newCron ? newCron : prev);
+            setScheduleTimeZone(prev => prev !== newTz ? newTz : prev);
         }
-    }, [cell?.cell_id, cell?.model, cell?.temperature, cell?.autoRun, cell?.enableTools, cell?.enabledTools, cell?.interval, cell?.prompt, cell?.cellPrompt, cell?.characterLimit, cell?.outputFormat, cell?.videoSeconds, cell?.videoResolution, cell?.videoAspectRatio, cell?.audioVoice, cell?.audioSpeed, cell?.audioFormat]);
+    }, [cell?.cell_id, cell?.model, cell?.temperature, cell?.autoRun, cell?.enableTools, cell?.enabledTools, cell?.interval, cell?.schedule, cell?.prompt, cell?.cellPrompt, cell?.characterLimit, cell?.outputFormat, cell?.videoSeconds, cell?.videoResolution, cell?.videoAspectRatio, cell?.audioVoice, cell?.audioSpeed, cell?.audioFormat]);
 
     const loadModels = async () => {
         try {
@@ -112,6 +119,14 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
     };
 
     const handleSave = async () => {
+        const cronTrim = (cronExpression || '').trim();
+        if (cronTrim) {
+            const v = validateCronExpression(cronTrim);
+            if (!v.ok) {
+                alert(v.error || 'Invalid cron expression');
+                return;
+            }
+        }
         // Ensure we're using the correct model ID format
         // The model value from the select is already in the correct format (originalId or id)
         const updated = {
@@ -140,7 +155,10 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
                 email: !!enabledTools.email,
                 telegram: !!enabledTools.telegram,
                 twilioSms: !!enabledTools.twilioSms
-            }
+            },
+            schedule: cronTrim
+                ? { cronExpression: cronTrim, timeZone: scheduleTimeZone || 'UTC' }
+                : null
         };
         onSave(updated);
         onClose();
@@ -446,8 +464,34 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
                                 placeholder="0 = disabled"
                             />
                             <p className="text-xs text-gray-400 mt-1">
-                                0 = disabled
+                                0 = disabled (browser tab must stay open). For server cron, use below.
                             </p>
+                        </div>
+                    </div>
+                    <div className="border border-amber-900/40 bg-amber-950/20 rounded-lg p-3 space-y-2">
+                        <p className="text-sm font-medium text-amber-200">Server schedule (cron)</p>
+                        <p className="text-xs text-gray-400">
+                            Requires <code className="text-amber-300/90">ENABLE_SCHEDULE_WORKER=true</code> on the API server. Uses auto-run: when the schedule fires, the card runs if the app is open; keep auto-run on.
+                        </p>
+                        <div>
+                            <label className="block text-xs text-gray-400 mb-1">Cron (5 fields: min hour dom month dow)</label>
+                            <input
+                                type="text"
+                                value={cronExpression}
+                                onChange={(e) => setCronExpression(e.target.value)}
+                                className="w-full bg-gray-800 rounded p-2 text-sm font-mono"
+                                placeholder="e.g. 0 9 * * 1 (Mon 09:00 UTC)"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs text-gray-400 mb-1">Time zone (IANA)</label>
+                            <input
+                                type="text"
+                                value={scheduleTimeZone}
+                                onChange={(e) => setScheduleTimeZone(e.target.value)}
+                                className="w-full bg-gray-800 rounded p-2 text-sm"
+                                placeholder="UTC"
+                            />
                         </div>
                     </div>
                     <div className="border border-gray-700 rounded-lg p-3 space-y-2">

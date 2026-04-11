@@ -13,7 +13,9 @@ import {
   where,
   writeBatch,
   serverTimestamp,
-  deleteField
+  deleteField,
+  Timestamp,
+  onSnapshot
 } from 'firebase/firestore';
 import { auth, db } from './config';
 
@@ -223,6 +225,49 @@ export async function saveCell(userId, projectId, sheetId, cellId, cellData) {
   }
 }
 
+/**
+ * Upsert or delete a schedule job document when cron + autoRun are set on a cell.
+ */
+export async function syncScheduleForCell(userId, projectId, sheetId, cellId, cellData) {
+  try {
+    const cronRaw = cellData?.schedule?.cronExpression;
+    const hasCron = cronRaw && String(cronRaw).trim().length > 0;
+    const jobDocId = `${projectId}_${sheetId}_${cellId}`.replace(/[/\s]/g, '_');
+    const jobRef = doc(db, 'users', userId, 'scheduleJobs', jobDocId);
+
+    if (!hasCron) {
+      await deleteDoc(jobRef).catch(() => {});
+      return { success: true, action: 'cleared' };
+    }
+    if (!cellData?.autoRun) {
+      await deleteDoc(jobRef).catch(() => {});
+      return { success: true, action: 'cleared_no_autorun' };
+    }
+
+    const cronExpression = String(cronRaw).trim();
+    const placeholderNext = Timestamp.fromDate(new Date(Date.now() + 60 * 1000));
+    const payload = {
+      userId,
+      projectId,
+      sheetId,
+      cellId,
+      cronExpression,
+      timeZone: cellData?.schedule?.timeZone || 'UTC',
+      enabled: true,
+      nextRunAt: placeholderNext,
+      updatedAt: serverTimestamp()
+    };
+
+    const existing = await getDoc(jobRef);
+    await setDoc(jobRef, existing.exists() ? payload : { ...payload, createdAt: serverTimestamp() }, {
+      merge: true
+    });
+    return { success: true, action: existing.exists() ? 'updated' : 'created', jobId: jobDocId };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
 export async function getCell(userId, projectId, sheetId, cellId) {
   try {
     const cellDoc = await getDoc(
@@ -250,6 +295,36 @@ export async function getSheetCells(userId, projectId, sheetId) {
   } catch (error) {
     return { success: false, error: error.message };
   }
+}
+
+/**
+ * Realtime listener for all cells on a sheet (for server-triggered runs).
+ * @returns {() => void} unsubscribe
+ */
+export function subscribeToSheetCells(userId, projectId, sheetId, onCells) {
+  const cellsCol = collection(
+    db,
+    'users',
+    userId,
+    'projects',
+    projectId,
+    'sheets',
+    sheetId,
+    'cells'
+  );
+  return onSnapshot(
+    cellsCol,
+    (snapshot) => {
+      const cells = [];
+      snapshot.forEach((docSnap) => {
+        cells.push({ cell_id: docSnap.id, ...docSnap.data() });
+      });
+      onCells({ success: true, cells });
+    },
+    (error) => {
+      onCells({ success: false, error: error.message, cells: [] });
+    }
+  );
 }
 
 export async function deleteCell(userId, projectId, sheetId, cellId) {

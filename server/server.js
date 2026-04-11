@@ -3348,3 +3348,10 @@ async function startServer() {
 }
 
 startServer();
+
+try {
+  const { startScheduleWorker } = require('./schedule-worker');
+  startScheduleWorker(parseInt(process.env.SCHEDULE_WORKER_INTERVAL_MS, 10) || 15000);
+} catch (e) {
+  console.warn('Schedule worker not started:', e.message);
+}

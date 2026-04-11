@@ -119,6 +119,8 @@ const TemplateModal = ({ isOpen, onClose, onSelectTemplate, availableModels = []
     const normalizedCells = cells.map((cell, index) => {
       const baseId = cell.cellId || cell.cellReference || `A${index + 1}`;
       const cellId = String(baseId).toUpperCase();
+      const enableTools = cell.enableTools === true;
+      const et = cell.enabledTools || {};
       return {
         cellId,
         cellReference: cell.cellReference || cellId,
@@ -130,6 +132,21 @@ const TemplateModal = ({ isOpen, onClose, onSelectTemplate, availableModels = []
         characterLimit: typeof cell.characterLimit === 'number' ? cell.characterLimit : 0,
         outputFormat: cell.outputFormat || '',
         autoRun: cell.autoRun ?? index > 0,
+        interval: typeof cell.interval === 'number' ? cell.interval : 0,
+        enableTools,
+        enabledTools: {
+          tavily: !!et.tavily,
+          email: !!et.email,
+          telegram: !!et.telegram,
+          twilioSms: !!et.twilioSms
+        },
+        schedule:
+          cell.schedule && typeof cell.schedule.cronExpression === 'string' && cell.schedule.cronExpression.trim()
+            ? {
+                cronExpression: cell.schedule.cronExpression.trim(),
+                timeZone: cell.schedule.timeZone || 'UTC'
+              }
+            : null,
         x: typeof cell.x === 'number' ? cell.x : 100 + index * 150,
         y: typeof cell.y === 'number' ? cell.y : 100 + index * 120
       };
@@ -158,8 +175,14 @@ const TemplateModal = ({ isOpen, onClose, onSelectTemplate, availableModels = []
       const modelId = getTextModelId();
 
       const systemPrompt = [
-        'You are an expert workflow designer for a card-based AI canvas.',
-        'Given a description, design a small set of 2-6 cards (cells) that work together.',
+        'You are an expert workflow designer for a card-based AI canvas (Draftai).',
+        'Cards can call TOOLS when the user has configured API keys in Profile: Tavily (web research), SendGrid/SMTP email, Telegram bot messages, Twilio SMS.',
+        'When a workflow needs external research, email digests, notifications, or SMS alerts, set "enableTools": true on the relevant TEXT cards and set "enabledTools" flags:',
+        '  "enabledTools": { "tavily": true/false, "email": true/false, "telegram": true/false, "twilioSms": true/false }',
+        'Prompts should tell the model WHAT to do with tools (e.g. search query topics, who to email). Tools run server-side; the template only configures which capabilities are allowed per card.',
+        'Scheduling: "interval" is seconds between runs while the app is open (0 = off). For recurring server-driven schedules, add "schedule": { "cronExpression": "0 9 * * 1", "timeZone": "America/New_York" } (5-field cron: min hour dom month dow). Cron requires autoRun true on that card.',
+        'Dependency order: use {{A1}}, {{B2}} in prompts; set "autoRun": true on downstream cards so they run when upstream finishes.',
+        'Given a description, design 2-6 cards that work together.',
         'Return ONLY valid JSON with this shape, no extra text or explanation:',
         '{',
         '  "name": "Short template name",',
@@ -171,13 +194,17 @@ const TemplateModal = ({ isOpen, onClose, onSelectTemplate, availableModels = []
         '      "cellId": "A1",',
         '      "cellReference": "A1",',
         '      "name": "Card title",',
-        '      "prompt": "Prompt text that may reference other cells like {{A1}}",',
+        '      "prompt": "Prompt text; may use {{A1}} references",',
         '      "modelType": "text" | "image" | "video" | "audio",',
-        '      "preferredModel": "gpt-4o" or other model id,',
+        '      "preferredModel": "gpt-4o-mini" or other model id,',
         '      "temperature": 0.7,',
         '      "characterLimit": 0,',
         '      "outputFormat": "markdown" | "plain" | "bullet-list" | "" ,',
-        '      "autoRun": true or false',
+        '      "autoRun": true or false,',
+        '      "interval": 0,',
+        '      "enableTools": false,',
+        '      "enabledTools": { "tavily": false, "email": false, "telegram": false, "twilioSms": false },',
+        '      "schedule": null',
         '    }',
         '  ]',
         '}'
@@ -185,7 +212,7 @@ const TemplateModal = ({ isOpen, onClose, onSelectTemplate, availableModels = []
 
       const fullPrompt = `${systemPrompt}\n\nUser template idea:\n${generatorPrompt.trim()}`;
 
-      const result = await generateAI(fullPrompt, modelId, 0.4, 2000);
+      const result = await generateAI(fullPrompt, modelId, 0.4, 4096);
 
       if (!result.success) {
         throw new Error(result.error || 'Template generation failed');
