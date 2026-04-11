@@ -3,6 +3,7 @@ import { X, Code2, HelpCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { getActiveModels } from '../firebase/firestore';
 import ConditionBuilder from './ConditionBuilder';
+import { validateCronExpression } from '../utils/schedule';
 
 const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} }) => {
     const [model, setModel] = useState(cell?.model || 'gpt-3.5-turbo');
@@ -34,6 +35,16 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
     const [elseValue, setElseValue] = useState('');
     const [thenValueType, setThenValueType] = useState('cell'); // 'cell' or 'text'
     const [elseValueType, setElseValueType] = useState('cell'); // 'cell' or 'text'
+    const [enableTools, setEnableTools] = useState(cell?.enableTools ?? false);
+    const [enabledTools, setEnabledTools] = useState(() => ({
+        tavily: !!cell?.enabledTools?.tavily,
+        email: !!cell?.enabledTools?.email,
+        telegram: !!cell?.enabledTools?.telegram,
+        twilioSms: !!cell?.enabledTools?.twilioSms,
+        ...(cell?.enabledTools || {})
+    }));
+    const [cronExpression, setCronExpression] = useState(cell?.schedule?.cronExpression || '');
+    const [scheduleTimeZone, setScheduleTimeZone] = useState(cell?.schedule?.timeZone || 'UTC');
 
     useEffect(() => {
         if (isOpen) {
@@ -62,6 +73,16 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
             const newAudioSpeed = cell.audioSpeed ?? 1.0;
             const newAudioFormat = cell.audioFormat || 'mp3';
             const newCondition = cell.condition || '';
+            const newEnableTools = cell.enableTools ?? false;
+            const newEnabledTools = {
+                tavily: !!cell.enabledTools?.tavily,
+                email: !!cell.enabledTools?.email,
+                telegram: !!cell.enabledTools?.telegram,
+                twilioSms: !!cell.enabledTools?.twilioSms,
+                ...(cell.enabledTools || {})
+            };
+            const newCron = cell.schedule?.cronExpression || '';
+            const newTz = cell.schedule?.timeZone || 'UTC';
 
             // Use functional updates to only set if changed
             setModel(prev => prev !== newModel ? newModel : prev);
@@ -79,8 +100,12 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
             setAudioSpeed(prev => prev !== newAudioSpeed ? newAudioSpeed : prev);
             setAudioFormat(prev => prev !== newAudioFormat ? newAudioFormat : prev);
             setCondition(prev => prev !== newCondition ? newCondition : prev);
+            setEnableTools(prev => prev !== newEnableTools ? newEnableTools : prev);
+            setEnabledTools(prev => JSON.stringify(prev) !== JSON.stringify(newEnabledTools) ? newEnabledTools : prev);
+            setCronExpression(prev => prev !== newCron ? newCron : prev);
+            setScheduleTimeZone(prev => prev !== newTz ? newTz : prev);
         }
-    }, [cell?.cell_id, cell?.model, cell?.temperature, cell?.autoRun, cell?.interval, cell?.prompt, cell?.cellPrompt, cell?.characterLimit, cell?.outputFormat, cell?.videoSeconds, cell?.videoResolution, cell?.videoAspectRatio, cell?.audioVoice, cell?.audioSpeed, cell?.audioFormat]);
+    }, [cell?.cell_id, cell?.model, cell?.temperature, cell?.autoRun, cell?.enableTools, cell?.enabledTools, cell?.interval, cell?.schedule, cell?.prompt, cell?.cellPrompt, cell?.characterLimit, cell?.outputFormat, cell?.videoSeconds, cell?.videoResolution, cell?.videoAspectRatio, cell?.audioVoice, cell?.audioSpeed, cell?.audioFormat]);
 
     const loadModels = async () => {
         try {
@@ -94,6 +119,14 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
     };
 
     const handleSave = async () => {
+        const cronTrim = (cronExpression || '').trim();
+        if (cronTrim) {
+            const v = validateCronExpression(cronTrim);
+            if (!v.ok) {
+                alert(v.error || 'Invalid cron expression');
+                return;
+            }
+        }
         // Ensure we're using the correct model ID format
         // The model value from the select is already in the correct format (originalId or id)
         const updated = {
@@ -115,7 +148,17 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
             audioVoice: audioVoice || 'alloy',
             audioSpeed: audioSpeed ?? 1.0,
             audioFormat: audioFormat || 'mp3',
-            output: cell?.output || ''
+            output: cell?.output || '',
+            enableTools: enableTools ?? false,
+            enabledTools: {
+                tavily: !!enabledTools.tavily,
+                email: !!enabledTools.email,
+                telegram: !!enabledTools.telegram,
+                twilioSms: !!enabledTools.twilioSms
+            },
+            schedule: cronTrim
+                ? { cronExpression: cronTrim, timeZone: scheduleTimeZone || 'UTC' }
+                : null
         };
         onSave(updated);
         onClose();
@@ -421,9 +464,72 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
                                 placeholder="0 = disabled"
                             />
                             <p className="text-xs text-gray-400 mt-1">
-                                0 = disabled
+                                0 = disabled (browser tab must stay open). For server cron, use below.
                             </p>
                         </div>
+                    </div>
+                    <div className="border border-amber-900/40 bg-amber-950/20 rounded-lg p-3 space-y-2">
+                        <p className="text-sm font-medium text-amber-200">Server schedule (cron)</p>
+                        <p className="text-xs text-gray-400">
+                            Requires <code className="text-amber-300/90">ENABLE_SCHEDULE_WORKER=true</code> on the API server. Set{' '}
+                            <code className="text-amber-300/90">SCHEDULE_RUN_ON_SERVER=true</code> to run the cell (text models) without an open browser. Otherwise the worker only signals the app—keep this tab open. Cron + autoRun must be set.
+                        </p>
+                        <div>
+                            <label className="block text-xs text-gray-400 mb-1">Cron (5 fields: min hour dom month dow)</label>
+                            <input
+                                type="text"
+                                value={cronExpression}
+                                onChange={(e) => setCronExpression(e.target.value)}
+                                className="w-full bg-gray-800 rounded p-2 text-sm font-mono"
+                                placeholder="e.g. 0 9 * * 1 (Mon 09:00 UTC)"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs text-gray-400 mb-1">Time zone (IANA)</label>
+                            <input
+                                type="text"
+                                value={scheduleTimeZone}
+                                onChange={(e) => setScheduleTimeZone(e.target.value)}
+                                className="w-full bg-gray-800 rounded p-2 text-sm"
+                                placeholder="UTC"
+                            />
+                        </div>
+                    </div>
+                    <div className="border border-gray-700 rounded-lg p-3 space-y-2">
+                        <label className="flex items-center gap-2">
+                            <input
+                                type="checkbox"
+                                checked={enableTools}
+                                onChange={(e) => setEnableTools(e.target.checked)}
+                                className="rounded"
+                            />
+                            <span className="text-sm font-medium">Tools (text models)</span>
+                        </label>
+                        <p className="text-xs text-gray-400">
+                            When enabled, the model can call integrations you configured in Profile. Add API keys there first.
+                        </p>
+                        {enableTools && (
+                            <div className="grid grid-cols-2 gap-2 pt-1">
+                                {[
+                                    { key: 'tavily', label: 'Tavily (research)' },
+                                    { key: 'email', label: 'Email (SendGrid/SMTP)' },
+                                    { key: 'telegram', label: 'Telegram' },
+                                    { key: 'twilioSms', label: 'SMS (Twilio)' }
+                                ].map(({ key, label }) => (
+                                    <label key={key} className="flex items-center gap-2 text-sm">
+                                        <input
+                                            type="checkbox"
+                                            checked={!!enabledTools[key]}
+                                            onChange={(e) =>
+                                                setEnabledTools((prev) => ({ ...prev, [key]: e.target.checked }))
+                                            }
+                                            className="rounded"
+                                        />
+                                        {label}
+                                    </label>
+                                ))}
+                            </div>
+                        )}
                     </div>
                     <div>
                         <label className="block text-sm mb-1">Cell Prompt Template</label>

@@ -31,6 +31,7 @@ if (process.env.STRIPE_SECRET_KEY) {
 
 // Firebase server integration for cloud deployment
 const { initializeFirebase, getOpenAIApiKey, getGeminiApiKey, getActiveModelsFromFirebase, diagnoseFirebaseModels } = require('./firebase-server-config');
+const { executeTool } = require('./tools-executor');
 const admin = require('firebase-admin');
 
 /**
@@ -1317,6 +1318,25 @@ function getContentType(filePath) {
 }
 
 /**
+ * Load integration API keys from Firestore (never sent to client).
+ */
+async function getIntegrationSecretsForUser(userId) {
+  try {
+    const firestoreInstance = await initializeFirebase();
+    if (!firestoreInstance || !userId) return {};
+    const userDoc = await firestoreInstance.collection('users').doc(userId).get();
+    if (!userDoc.exists) return {};
+    const data = userDoc.data() || {};
+    return data.integrationSecrets && typeof data.integrationSecrets === 'object'
+      ? data.integrationSecrets
+      : {};
+  } catch (e) {
+    console.error('getIntegrationSecretsForUser:', e.message);
+    return {};
+  }
+}
+
+/**
  * Handle incoming HTTP requests.
  * For GET requests, serves files from the public directory.
  * For API requests, handles OpenAI and Gemini integration.
@@ -1563,6 +1583,43 @@ window.storage = storage;`;
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({ error: error.message }));
       }
+      return;
+    }
+
+    if (pathname === '/api/cell-tools' && req.method === 'POST') {
+      if (!verifiedUserId) {
+        handleError(res, 401, 'Unauthorized');
+        return;
+      }
+      let body = '';
+      req.on('data', (chunk) => {
+        body += chunk;
+        if (body.length > 1e6) req.destroy();
+      });
+      req.on('end', async () => {
+        try {
+          const data = JSON.parse(body || '{}');
+          const toolCalls = Array.isArray(data.toolCalls) ? data.toolCalls : [];
+          if (toolCalls.length > 8) {
+            handleError(res, 400, 'Too many tool calls');
+            return;
+          }
+          const secrets = await getIntegrationSecretsForUser(verifiedUserId);
+          const results = [];
+          for (const tc of toolCalls) {
+            const tool = tc.tool || tc.name;
+            const args = tc.args || tc.arguments || {};
+            const r = await executeTool(tool, args, secrets);
+            results.push({ tool, ok: r.ok, data: r.data, error: r.error });
+          }
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.end(JSON.stringify({ success: true, results }));
+        } catch (error) {
+          handleError(res, 500, error.message || 'Tool execution failed');
+        }
+      });
       return;
     }
 
@@ -3291,3 +3348,10 @@ async function startServer() {
 }
 
 startServer();
+
+try {
+  const { startScheduleWorker } = require('./schedule-worker');
+  startScheduleWorker(parseInt(process.env.SCHEDULE_WORKER_INTERVAL_MS, 10) || 15000);
+} catch (e) {
+  console.warn('Schedule worker not started:', e.message);
+}

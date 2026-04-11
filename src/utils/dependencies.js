@@ -135,7 +135,18 @@ function extractDependenciesFromValue(value) {
  * await resolveCellReference('Sheet2!A1', context) // Returns A1 from Sheet2
  */
 export async function resolveCellReference(reference, context) {
-  const { sheets, currentSheet, getCell, loadSheetCells, userId, projectId, runningCellsSet, getLatestCells } = context;
+  const {
+    sheets,
+    currentSheet,
+    getCell,
+    loadSheetCells,
+    userId,
+    projectId,
+    runningCellsSet,
+    getLatestCells,
+    disableAlerts,
+    skipClientGenerationFetch
+  } = context;
   
   // Debug: Log the reference being resolved
   if (reference.includes('!')) {
@@ -294,7 +305,7 @@ export async function resolveCellReference(reference, context) {
         const sheetInfo = targetSheet.id !== currentSheet.id ? ` in sheet "${targetSheet.name}"` : '';
         const message = `Cell "${cellId}"${sheetInfo} not found`;
         console.warn(`❌ ${message}`);
-        alert(message);
+        if (typeof alert === 'function' && !disableAlerts) alert(message);
         return '';
       } else {
         // Not a valid cell reference, return original (it's a placeholder)
@@ -320,7 +331,12 @@ export async function resolveCellReference(reference, context) {
     // NOTE: Removed waiting logic - cells just use whatever value is available
 
     // Load generations from Firestore if needed (for generation-specific references)
-    if (generationSpec && (!generations || generations.length === 0)) {
+    // skipClientGenerationFetch: server/Node runs must not import the browser Firebase SDK
+    if (
+      generationSpec &&
+      (!generations || generations.length === 0) &&
+      !skipClientGenerationFetch
+    ) {
       // Try to load generations from Firestore
       try {
         const { getGenerations } = await import('../firebase/firestore');
@@ -391,7 +407,7 @@ export async function resolveCellReference(reference, context) {
         const sheetInfo = targetSheet.id !== currentSheet.id ? ` in sheet "${targetSheet.name}"` : '';
         const message = `Cell ${cellId}${sheetInfo} has no prompt text available`;
         console.warn(`⚠️ ${message}`);
-        alert(message);
+        if (typeof alert === 'function' && !disableAlerts) alert(message);
         result = '';
       }
     } else {
@@ -411,7 +427,7 @@ export async function resolveCellReference(reference, context) {
           const sheetInfo = targetSheet.id !== currentSheet.id ? ` in sheet "${targetSheet.name}"` : '';
           const message = `Cell ${cellId}${sheetInfo} has no output or prompt available`;
           console.warn(`⚠️ ${message}`);
-          alert(message);
+          if (typeof alert === 'function' && !disableAlerts) alert(message);
           result = '';
         }
       } else {
@@ -426,9 +442,13 @@ export async function resolveCellReference(reference, context) {
           result = outputText.trim();
         } else {
           // Strip any HTML tags if present and return text content
-          const tempDiv = document.createElement('div');
-          tempDiv.innerHTML = outputText;
-          result = tempDiv.textContent || tempDiv.innerText || outputText;
+          if (typeof document !== 'undefined' && document.createElement) {
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = outputText;
+            result = tempDiv.textContent || tempDiv.innerText || outputText;
+          } else {
+            result = outputText.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          }
         }
       }
     }
