@@ -198,6 +198,29 @@ export async function checkJobStatus(jobId, userId = null) {
 }
 
 /**
+ * Run server-side tools (Tavily, email, Telegram, Twilio) using secrets stored for the user.
+ */
+export async function executeCellTools(toolCalls) {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/cell-tools`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(await getAuthHeaders()),
+      },
+      body: JSON.stringify({ toolCalls: toolCalls || [] }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || `API error: ${response.status}`);
+    }
+    return { success: true, results: data.results || [] };
+  } catch (error) {
+    return { success: false, error: error.message, results: [] };
+  }
+}
+
+/**
  * Get available AI models
  */
 export async function getAvailableModels() {

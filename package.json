@@ -12,19 +12,23 @@
     "server": "node server/server.js",
     "start": "node server/server.js",
     "build:server": "vite build && node scripts/sync-server-public.mjs",
-    "test:rules": "firebase emulators:exec --only firestore \"node ./tests/firestore.rules.test.mjs\""
+    "test:rules": "firebase emulators:exec --only firestore \"node ./tests/firestore.rules.test.mjs\"",
+    "test:newsletter": "node ./tests/newsletter-pipeline.test.mjs",
+    "test:scheduled-tools": "node ./tests/scheduled-tools-loop.selftest.mjs"
   },
   "engines": {
     "node": "20.x"
   },
   "dependencies": {
     "@use-gesture/react": "^10.3.1",
+    "cron-parser": "^5.5.0",
     "dotenv": "^17.2.3",
     "firebase": "^12.6.0",
     "firebase-admin": "^13.6.0",
     "framer-motion": "^12.23.26",
     "jspdf": "^3.0.4",
     "lucide-react": "^0.560.0",
+    "nodemailer": "^6.9.16",
     "openai": "^6.10.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
@@ -35,8 +39,8 @@
     "sqlite3": "^5.1.7"
   },
   "devDependencies": {
-    "@firebase/rules-unit-testing": "^5.0.0",
     "@eslint/js": "^9.39.1",
+    "@firebase/rules-unit-testing": "^5.0.0",
     "@tailwindcss/postcss": "^4.1.17",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
