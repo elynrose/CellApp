@@ -23,6 +23,19 @@
     padding-top: max(0.5rem, env(safe-area-inset-top, 0px));
   }
 
+  @keyframes mobile-drawer-in {
+    from {
+      transform: translateX(100%);
+    }
+    to {
+      transform: translateX(0);
+    }
+  }
+
+  .mobile-drawer-panel {
+    animation: mobile-drawer-in 0.22s ease-out forwards;
+  }
+
   .glass-panel {
     @apply bg-white/10 backdrop-blur-md border border-white/20 shadow-xl;
   }

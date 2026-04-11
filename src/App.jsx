@@ -74,6 +74,20 @@ function App() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e) => {
+      if (e.key === 'Escape') setMobileMenuOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [mobileMenuOpen]);
+
   // Interval timers for autorun cells
   const intervalTimersRef = useRef({});
   // Ref to store latest cells for autorun dependency checking
@@ -2091,11 +2105,12 @@ function App() {
             <button
               type="button"
               onClick={() => setMobileMenuOpen((o) => !o)}
-              className="lg:hidden p-2 rounded-lg hover:bg-white/10 text-gray-300 border border-white/10"
+              className="lg:hidden p-2.5 rounded-lg hover:bg-white/10 text-gray-300 border border-white/10 touch-manipulation"
               aria-expanded={mobileMenuOpen}
-              aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
+              aria-controls="mobile-nav-drawer"
+              aria-label="Open menu"
             >
-              {mobileMenuOpen ? <X size={22} /> : <Menu size={22} />}
+              <Menu size={22} strokeWidth={2.25} />
             </button>
             <div className="hidden lg:flex items-center gap-2 xl:gap-3">
               <button
@@ -2229,8 +2244,39 @@ function App() {
             )}
           </div>
 
-          {mobileMenuOpen && (
-            <div className="lg:hidden border-t border-white/10 px-3 py-3 space-y-2 bg-gray-950/80 backdrop-blur-md">
+        </div>
+      </div>
+
+      {/* Mobile: hamburger slide-out drawer (fixed overlay) */}
+      {mobileMenuOpen && (
+        <div className="lg:hidden fixed inset-0 z-[100]">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/55 backdrop-blur-[2px]"
+            aria-label="Close menu"
+            onClick={() => setMobileMenuOpen(false)}
+          />
+          <div
+            id="mobile-nav-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mobile-nav-title"
+            className="mobile-drawer-panel absolute inset-y-0 right-0 flex w-[min(20rem,100%)] max-w-[min(20rem,calc(100vw-env(safe-area-inset-left)-env(safe-area-inset-right)))] flex-col border-l border-white/10 bg-gray-950/95 shadow-2xl backdrop-blur-xl pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]"
+          >
+            <div className="flex items-center justify-between gap-2 border-b border-white/10 px-4 py-3 shrink-0">
+              <h2 id="mobile-nav-title" className="text-base font-semibold text-white">
+                Menu
+              </h2>
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen(false)}
+                className="p-2 rounded-lg hover:bg-white/10 text-gray-300 touch-manipulation"
+                aria-label="Close menu"
+              >
+                <X size={22} />
+              </button>
+            </div>
+            <nav className="flex-1 overflow-y-auto overscroll-contain px-3 py-3 space-y-2 [-webkit-overflow-scrolling:touch]">
               {connectingSource && (
                 <div className="px-3 py-2 bg-blue-500/20 border border-blue-500/30 rounded-lg text-xs text-blue-200">
                   Select another card to complete the connection.
@@ -2243,9 +2289,9 @@ function App() {
                     navigate('/projects');
                     setMobileMenuOpen(false);
                   }}
-                  className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg bg-white/5 border border-white/10 text-sm text-gray-200"
+                  className="w-full flex items-center gap-3 px-3 py-3 rounded-xl bg-white/5 border border-white/10 text-sm text-gray-100 text-left touch-manipulation"
                 >
-                  <FolderOpen size={18} />
+                  <FolderOpen size={20} className="shrink-0 text-blue-300" />
                   Projects
                 </button>
               )}
@@ -2255,9 +2301,9 @@ function App() {
                   addCard();
                   setMobileMenuOpen(false);
                 }}
-                className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg bg-blue-600 text-white text-sm font-semibold"
+                className="w-full flex items-center gap-3 px-3 py-3 rounded-xl bg-blue-600 text-white text-sm font-semibold text-left touch-manipulation"
               >
-                <Plus size={18} />
+                <Plus size={20} className="shrink-0" />
                 Add Card
               </button>
               <button
@@ -2267,9 +2313,9 @@ function App() {
                   setMobileMenuOpen(false);
                 }}
                 disabled={!activeSheet || cellsArray.length === 0}
-                className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg bg-purple-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-sm font-semibold"
+                className="w-full flex items-center gap-3 px-3 py-3 rounded-xl bg-purple-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-sm font-semibold text-left touch-manipulation"
               >
-                <FileText size={18} />
+                <FileText size={20} className="shrink-0" />
                 Download PDF
               </button>
               <button
@@ -2278,15 +2324,15 @@ function App() {
                   setShowTemplates(true);
                   setMobileMenuOpen(false);
                 }}
-                className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 text-white text-sm font-semibold"
+                className="w-full flex items-center gap-3 px-3 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 text-white text-sm font-semibold text-left touch-manipulation"
               >
-                <Sparkles size={18} />
+                <Sparkles size={20} className="shrink-0" />
                 Templates
               </button>
-            </div>
-          )}
+            </nav>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Main Content (Canvas) */}
       <div className="flex-1 overflow-hidden relative">
