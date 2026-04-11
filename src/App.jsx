@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { onAuthStateChange } from './firebase/auth';
 import { getProjects, createProject, getSheets, createSheet, updateSheet, getSheetCells, saveCell, getActiveModels, deleteCell, getUserSubscription } from './firebase/firestore';
-import { resolveTemplateForGoal } from './services/orchestrator';
+import { runOrchestratorHandoffPipeline } from './services/orchestrator';
 import { runCell, pollJobStatus, cancelPolling } from './services/cellExecution';
 import { parseDependencies, findDependentCells } from './utils/dependencies';
 import { getModelType } from './api';
@@ -44,6 +44,8 @@ function App() {
   const [showOrchestratorModal, setShowOrchestratorModal] = useState(false);
   const [orchestratorPrompt, setOrchestratorPrompt] = useState('');
   const [orchestratorRunning, setOrchestratorRunning] = useState(false);
+  const [orchestratorMaxPhases, setOrchestratorMaxPhases] = useState(5);
+  const [orchestratorHandoffLog, setOrchestratorHandoffLog] = useState([]);
 
   // Auto-dismiss notifications after 8 seconds
   useEffect(() => {
@@ -1464,22 +1466,62 @@ function App() {
         await clearCurrentSheetCells();
       }
 
-      const res = await resolveTemplateForGoal(goal, availableModels);
-      if (!res.success) {
+      setOrchestratorHandoffLog([]);
+      const maxPhases = Math.min(Math.max(Number(orchestratorMaxPhases) || 5, 1), 10);
+
+      const pipeline = await runOrchestratorHandoffPipeline(goal, availableModels, {
+        maxPhases,
+        onProgress: (ev) => {
+          setOrchestratorHandoffLog((prev) => [...prev, ev]);
+        }
+      });
+
+      if (!pipeline.success) {
         setNotification({
           type: 'error',
           title: 'Orchestrator failed',
-          message: res.error || 'Could not build a workflow.',
+          message: pipeline.error || 'Could not build workflows.',
           showUpgrade: false
         });
         return;
       }
 
-      await applyTemplate(res.template, { skipEmptySheetCheck: true });
-      const msg =
-        res.source === 'generated'
-          ? `Created workflow "${res.template.name}" (template saved) with ${res.template.cells.length} cards.`
-          : `Applied "${res.template.name}" (${res.template.cells.length} cards).`;
+      const phases = pipeline.phases || [];
+      if (phases.length === 0) {
+        setNotification({
+          type: 'info',
+          title: 'Orchestrator',
+          message: pipeline.summary || 'No template phases were needed.',
+          showUpgrade: false
+        });
+        setShowOrchestratorModal(false);
+        setOrchestratorPrompt('');
+        return;
+      }
+
+      for (let i = 0; i < phases.length; i++) {
+        const p = phases[i];
+        setOrchestratorHandoffLog((prev) => [
+          ...prev,
+          { type: 'applying', phase: i + 1, total: phases.length, templateName: p.template.name }
+        ]);
+        if (i > 0) {
+          await clearCurrentSheetCells();
+        }
+        await applyTemplate(p.template, { skipEmptySheetCheck: true });
+      }
+
+      const last = phases[phases.length - 1];
+      const parts = phases.map(
+        (p, idx) =>
+          `Phase ${idx + 1}: ${p.template.name}${p.source === 'generated' ? ' (saved)' : ''}`
+      );
+      let msg = parts.join(' → ');
+      if (pipeline.finished && pipeline.stopReason === 'goal_met') {
+        msg += `. ${pipeline.summary || 'Goal addressed.'}`;
+      } else if (pipeline.stopReason === 'max_phases') {
+        msg += `. ${pipeline.summary || ''}`;
+      }
       setNotification({
         type: 'success',
         title: 'Orchestrator',
@@ -1488,6 +1530,7 @@ function App() {
       });
       setShowOrchestratorModal(false);
       setOrchestratorPrompt('');
+      setOrchestratorHandoffLog([]);
     } catch (e) {
       setNotification({
         type: 'error',
@@ -2467,7 +2510,7 @@ function App() {
                   Orchestrator
                 </h3>
                 <p className="text-sm text-gray-400 mt-1">
-                  Describe the task or workflow you want. We match an existing template when possible; otherwise we generate one, save it to your library, and place the cards on this sheet.
+                  Describe your main goal. The orchestrator may run several templates in sequence (hand-offs): each phase can use a different template or create one, until the goal is satisfied or the phase limit is reached. Repeating the same template is blocked to avoid loops.
                 </p>
               </div>
               <button
@@ -2480,7 +2523,7 @@ function App() {
               </button>
             </div>
             <div>
-              <label className="block text-sm text-gray-300 mb-1">Task prompt</label>
+              <label className="block text-sm text-gray-300 mb-1">Main goal</label>
               <textarea
                 value={orchestratorPrompt}
                 onChange={(e) => setOrchestratorPrompt(e.target.value)}
@@ -2490,6 +2533,39 @@ function App() {
                 className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white placeholder:text-gray-500"
               />
             </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="text-sm text-gray-300 flex items-center gap-2">
+                Max hand-off phases
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={orchestratorMaxPhases}
+                  onChange={(e) =>
+                    setOrchestratorMaxPhases(
+                      Math.min(10, Math.max(1, parseInt(e.target.value, 10) || 5))
+                    )
+                  }
+                  disabled={orchestratorRunning}
+                  className="w-16 bg-black/40 border border-white/10 rounded px-2 py-1 text-sm text-white"
+                />
+              </label>
+              <span className="text-xs text-gray-500">1–10 (stops early if the goal is met)</span>
+            </div>
+            {orchestratorHandoffLog.length > 0 && (
+              <div className="max-h-32 overflow-y-auto rounded-lg bg-black/30 border border-white/5 p-2 text-xs font-mono text-gray-400 space-y-1">
+                {orchestratorHandoffLog.slice(-20).map((ev, i) => (
+                  <div key={i} className="truncate">
+                    {ev.type === 'plan_start' && `Planning phase ${ev.round}/${ev.maxPhases}…`}
+                    {ev.type === 'resolve' && `→ ${ev.instruction?.slice(0, 120)}${(ev.instruction?.length || 0) > 120 ? '…' : ''}`}
+                    {ev.type === 'phase_ready' && `Template: ${ev.templateName}`}
+                    {ev.type === 'done' && `Goal check: done`}
+                    {ev.type === 'applying' &&
+                      `Applying ${ev.phase}/${ev.total}: ${ev.templateName}`}
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="flex justify-end gap-2">
               <button
                 type="button"

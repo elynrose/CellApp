@@ -103,12 +103,37 @@ export function normalizeTemplateFromAI(raw, getTextModelId) {
   };
 }
 
+function parseJsonFromModel(text) {
+  if (!text || typeof text !== 'string') return null;
+  let t = text.trim();
+  if (t.startsWith('```')) {
+    t = t.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  }
+  try {
+    return JSON.parse(t);
+  } catch {
+    const start = t.indexOf('{');
+    const end = t.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(t.slice(start, end + 1));
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
 /**
  * Ask the model which existing template id fits the goal, or null.
+ * @param {string[]} excludeTemplateIds - do not pick these ids (hand-off diversity)
  */
-export async function findMatchingTemplateId(userGoal, templates, getTextModelId) {
+export async function findMatchingTemplateId(userGoal, templates, getTextModelId, excludeTemplateIds = []) {
   const modelId = getTextModelId();
-  const compact = templates
+  const exclude = new Set((excludeTemplateIds || []).filter(Boolean));
+  const filtered = templates.filter((t) => t?.id && !exclude.has(t.id));
+  const compact = filtered
     .slice(0, 60)
     .map((t) => ({
       id: t.id,
@@ -145,6 +170,68 @@ export async function findMatchingTemplateId(userGoal, templates, getTextModelId
   } catch {
     return { templateId: null, error: 'Could not parse template match' };
   }
+}
+
+/**
+ * After each template phase, decide if the main goal is met or what the next hand-off should do.
+ */
+export async function planNextHandoff(mainGoal, phaseHistory, phaseIndex, maxPhases, getTextModelId) {
+  const modelId = getTextModelId();
+  const system = [
+    'You are the Draftai orchestrator. The MAIN GOAL is what the user ultimately wants.',
+    'Several workflow templates (phases) may run one after another on the same sheet; each phase replaces the canvas with a new template.',
+    'Rules:',
+    '- If the phase history is EMPTY, you MUST set done: false and provide nextInstruction for the FIRST workflow (unless the goal is literally "nothing to do").',
+    '- If the MAIN GOAL is fully satisfied by what has already been completed in phase history, set done: true.',
+    '- Otherwise set done: false and nextInstruction: one concrete task string for the NEXT template only.',
+    '- Do not invent infinite work. If uncertain after several phases, prefer done: true.',
+    '- nextInstruction should not duplicate the last phase instruction verbatim.',
+    `Reply with ONLY valid JSON: {"done": true|false, "reason": "short", "nextInstruction": "only when done is false"}`
+  ].join('\n');
+
+  const user = [
+    `MAIN GOAL:\n${String(mainGoal).trim()}`,
+    '',
+    `Phase ${phaseIndex} of max ${maxPhases} (stops if goal met or max reached).`,
+    '',
+    'Completed phases (most recent last):',
+    JSON.stringify(phaseHistory || [], null, 0)
+  ].join('\n');
+
+  const result = await generateAI(`${system}\n\n${user}`, modelId, 0.25, 1200);
+  if (!result.success) {
+    return { done: false, error: result.error, nextInstruction: null, reason: null };
+  }
+
+  const parsed = parseJsonFromModel(result.output || '');
+  if (!parsed || typeof parsed.done !== 'boolean') {
+    return { done: false, error: 'Invalid planner response', nextInstruction: null, reason: null };
+  }
+
+  if (parsed.done) {
+    return {
+      done: true,
+      reason: typeof parsed.reason === 'string' ? parsed.reason : 'Goal complete.',
+      nextInstruction: null
+    };
+  }
+
+  const nextInstruction =
+    typeof parsed.nextInstruction === 'string' ? parsed.nextInstruction.trim() : '';
+  if (!nextInstruction) {
+    return {
+      done: false,
+      error: 'Planner did not provide nextInstruction',
+      nextInstruction: null,
+      reason: typeof parsed.reason === 'string' ? parsed.reason : null
+    };
+  }
+
+  return {
+    done: false,
+    reason: typeof parsed.reason === 'string' ? parsed.reason : '',
+    nextInstruction
+  };
 }
 
 /**
@@ -220,12 +307,15 @@ export async function generateAndSaveTemplate(userGoal, getTextModelId) {
 
 /**
  * Resolve a template for the goal: reuse existing or create new.
+ * @param {object} [options]
+ * @param {string[]} [options.excludeTemplateIds] - ids to exclude from matching (hand-off)
  */
-export async function resolveTemplateForGoal(userGoal, availableModels) {
+export async function resolveTemplateForGoal(userGoal, availableModels, options = {}) {
+  const { excludeTemplateIds = [] } = options;
   const getTextModelId = () => pickTextModelId(availableModels);
   const templates = await loadAllTemplatesMerged();
 
-  const match = await findMatchingTemplateId(userGoal, templates, getTextModelId);
+  const match = await findMatchingTemplateId(userGoal, templates, getTextModelId, excludeTemplateIds);
   if (match.templateId) {
     const t = templates.find((x) => x.id === match.templateId);
     if (t && Array.isArray(t.cells) && t.cells.length > 0) {
@@ -246,5 +336,122 @@ export async function resolveTemplateForGoal(userGoal, availableModels) {
     success: true,
     source: 'generated',
     template: created.template
+  };
+}
+
+/**
+ * Multi-phase orchestration: plan → template → repeat until goal met or limits.
+ * Caller applies each phase template to the sheet (clearing between phases as needed).
+ *
+ * @param {object} [options]
+ * @param {number} [options.maxPhases] - max templates to apply (default 5)
+ * @param {(ev: object) => void} [options.onProgress]
+ */
+export async function runOrchestratorHandoffPipeline(mainGoal, availableModels, options = {}) {
+  const maxPhases = Math.min(Math.max(Number(options.maxPhases) || 5, 1), 10);
+  const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+  const getTextModelId = () => pickTextModelId(availableModels);
+
+  const phases = [];
+  const phaseHistory = [];
+
+  for (let round = 1; round <= maxPhases; round++) {
+    if (onProgress) {
+      onProgress({ type: 'plan_start', round, maxPhases });
+    }
+
+    const plan = await planNextHandoff(
+      mainGoal,
+      phaseHistory,
+      round,
+      maxPhases,
+      getTextModelId
+    );
+
+    if (plan.error && !plan.done) {
+      return { success: false, error: plan.error, phases };
+    }
+
+    if (plan.done) {
+      if (onProgress) {
+        onProgress({ type: 'done', round, reason: plan.reason });
+      }
+      return {
+        success: true,
+        finished: true,
+        stopReason: 'goal_met',
+        phases,
+        summary: plan.reason || 'Goal complete.'
+      };
+    }
+
+    const instruction = plan.nextInstruction;
+    if (!instruction) {
+      return { success: false, error: 'Orchestrator gave no next instruction.', phases };
+    }
+
+    if (onProgress) {
+      onProgress({ type: 'resolve', round, instruction });
+    }
+
+    const usedIds = phases.map((p) => p.template.id).filter(Boolean);
+    const excludeTemplateIds = [...new Set(usedIds)];
+
+    const resolved = await resolveTemplateForGoal(instruction, availableModels, { excludeTemplateIds });
+    if (!resolved.success) {
+      return { success: false, error: resolved.error, phases };
+    }
+
+    if (usedIds.includes(resolved.template.id)) {
+      return {
+        success: false,
+        error:
+          'Hand-off stopped: a template would repeat. Try a more specific goal or run follow-up phases manually.',
+        phases
+      };
+    }
+
+    const lastInstr = phases.length > 0 ? phases[phases.length - 1].instruction : null;
+    if (lastInstr && instruction.trim().toLowerCase() === lastInstr.trim().toLowerCase()) {
+      return {
+        success: false,
+        error: 'Hand-off stopped: repeated instruction would loop. Refine your goal.',
+        phases
+      };
+    }
+
+    phases.push({
+      phase: phases.length + 1,
+      instruction,
+      template: resolved.template,
+      source: resolved.source,
+      matchReason: resolved.matchReason,
+      plannerReason: plan.reason
+    });
+
+    phaseHistory.push({
+      phase: phases.length,
+      templateId: resolved.template.id,
+      templateName: resolved.template.name,
+      instruction,
+      source: resolved.source
+    });
+
+    if (onProgress) {
+      onProgress({
+        type: 'phase_ready',
+        round,
+        templateName: resolved.template.name,
+        templateId: resolved.template.id
+      });
+    }
+  }
+
+  return {
+    success: true,
+    finished: false,
+    stopReason: 'max_phases',
+    phases,
+    summary: `Stopped after ${maxPhases} phase(s). The goal may need another run or a narrower scope.`
   };
 }
