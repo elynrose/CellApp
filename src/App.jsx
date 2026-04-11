@@ -6,7 +6,7 @@ import { runCell, runCells, formatOutput, pollJobStatus, cancelPolling } from '.
 import { parseDependencies, findDependentCells } from './utils/dependencies';
 import { getModelType } from './api';
 import Canvas from './components/Canvas';
-import { Plus, Box, Grid, Trash2, Play, LogOut, User, Shield, Crown, X, AlertCircle, Sparkles, Check, Edit2, GripVertical, ChevronDown, FolderOpen, Copy, FileText, Download } from 'lucide-react';
+import { Plus, Box, Grid, Trash2, Play, LogOut, User, Shield, Crown, X, AlertCircle, Sparkles, Check, Edit2, GripVertical, ChevronDown, FolderOpen, Copy, FileText, Download, Menu } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { signInWithGoogle, signOutUser, isCurrentUserAdmin } from './firebase/auth';
 import AdminDashboard from './components/AdminDashboard';
@@ -39,6 +39,7 @@ function App() {
   const [notification, setNotification] = useState(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Auto-dismiss notifications after 8 seconds
   useEffect(() => {
@@ -62,7 +63,31 @@ function App() {
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
   }, [showUserMenu]);
-  
+
+  useEffect(() => {
+    const onResize = () => {
+      if (typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches) {
+        setMobileMenuOpen(false);
+      }
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e) => {
+      if (e.key === 'Escape') setMobileMenuOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [mobileMenuOpen]);
+
   // Interval timers for autorun cells
   const intervalTimersRef = useRef({});
   // Ref to store latest cells for autorun dependency checking
@@ -2033,72 +2058,88 @@ function App() {
   return (
     <div className="h-screen flex flex-col mesh-gradient text-white font-sans overflow-hidden">
       {/* Toolbar / Header */}
-      <div className="h-16 flex items-center px-6 justify-between glass-panel z-50 relative pointer-events-auto">
-        <div className="flex items-center gap-4">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-500 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
-            <Box size={24} strokeWidth={2.5} />
+      <div className="relative z-50 glass-panel pointer-events-auto border-b border-white/5 safe-area-pt">
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 px-3 sm:px-4 md:px-6 py-2 md:py-0 md:min-h-16 md:flex-nowrap">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 shrink-0 rounded-xl bg-gradient-to-tr from-blue-500 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
+              <Box size={22} strokeWidth={2.5} className="sm:w-6 sm:h-6" />
+            </div>
+            <div className="flex flex-col min-w-0">
+              <h1 className="text-lg sm:text-xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-300 truncate">
+                Draftai
+              </h1>
+              <span className="text-[10px] text-gray-400 font-medium tracking-wider uppercase hidden sm:block">Beta v2.0</span>
+            </div>
+            {user && currentProjectId && (
+              <button
+                onClick={() => {
+                  navigate('/projects');
+                  setMobileMenuOpen(false);
+                }}
+                className="hidden lg:inline-flex ml-1 sm:ml-2 px-3 sm:px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-sm font-medium text-gray-300 hover:text-white transition-all items-center gap-2 shrink-0"
+                title="Manage projects"
+              >
+                <FolderOpen size={16} />
+                Projects
+              </button>
+            )}
+
+            {connectingSource && (
+              <div className="hidden md:flex ml-1 sm:ml-2 px-2 sm:px-3 py-1 bg-blue-500/20 border border-blue-500/30 rounded-full items-center gap-2 animate-pulse shrink-0">
+                <span className="w-2 h-2 bg-blue-400 rounded-full shrink-0" />
+                <span className="text-xs text-blue-200 font-medium whitespace-nowrap">Select target to connect</span>
+              </div>
+            )}
           </div>
-          <div className="flex flex-col">
-            <h1 className="text-xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-300">
-              Draftai
-            </h1>
-            <span className="text-[10px] text-gray-400 font-medium tracking-wider uppercase">Beta v2.0</span>
-          </div>
-          {user && currentProjectId && (
+
+          <div className="flex items-center gap-1.5 sm:gap-2 md:gap-3 shrink-0">
+            {userCredits && (
+              <div className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+                <Sparkles size={14} className="text-blue-400 shrink-0" />
+                <span className="text-xs sm:text-sm font-semibold text-blue-300 tabular-nums whitespace-nowrap">
+                  {userCredits.credits?.current || 0}
+                  <span className="hidden sm:inline"> Credits</span>
+                </span>
+              </div>
+            )}
             <button
-              onClick={() => navigate('/projects')}
-              className="ml-4 px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-sm font-medium text-gray-300 hover:text-white transition-all flex items-center gap-2"
-              title="Manage projects"
+              type="button"
+              onClick={() => setMobileMenuOpen((o) => !o)}
+              className="lg:hidden p-2.5 rounded-lg hover:bg-white/10 text-gray-300 border border-white/10 touch-manipulation"
+              aria-expanded={mobileMenuOpen}
+              aria-controls="mobile-nav-drawer"
+              aria-label="Open menu"
             >
-              <FolderOpen size={16} />
-              Projects
+              <Menu size={22} strokeWidth={2.25} />
             </button>
-          )}
-
-          {connectingSource && (
-            <div className="ml-4 px-3 py-1 bg-blue-500/20 border border-blue-500/30 rounded-full flex items-center gap-2 animate-pulse">
-              <span className="w-2 h-2 bg-blue-400 rounded-full"></span>
-              <span className="text-xs text-blue-200 font-medium">Select target to connect</span>
+            <div className="hidden lg:flex items-center gap-2 xl:gap-3">
+              <button
+                onClick={() => addCard()}
+                className="px-4 xl:px-5 py-2 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white rounded-lg text-sm font-semibold transition-all shadow-lg shadow-blue-900/20 flex items-center gap-2"
+              >
+                <Plus size={16} />
+                Add Card
+              </button>
+              <button
+                onClick={() => handleDownloadSheet()}
+                disabled={!activeSheet || cellsArray.length === 0}
+                className="px-4 xl:px-5 py-2 bg-purple-600 hover:bg-purple-500 active:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition-all shadow-lg shadow-purple-900/20 flex items-center gap-2"
+                title="Download sheet as PDF"
+              >
+                <FileText size={16} />
+                <span className="hidden xl:inline">Download Sheet</span>
+                <span className="xl:hidden">PDF</span>
+              </button>
+              <button
+                onClick={() => setShowTemplates(true)}
+                className="px-4 xl:px-5 py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 active:from-purple-700 active:to-pink-700 text-white rounded-lg text-sm font-semibold transition-all shadow-lg shadow-purple-900/20 flex items-center gap-2"
+                title="Use a template"
+              >
+                <Sparkles size={16} />
+                Templates
+              </button>
             </div>
-          )}
-        </div>
-
-        <div className="flex gap-3 items-center">
-          {/* Credit Balance Display */}
-          {userCredits && (
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-              <Sparkles size={14} className="text-blue-400" />
-              <span className="text-sm font-semibold text-blue-300">
-                {userCredits.credits?.current || 0} Credits
-              </span>
-            </div>
-          )}
-          <button
-            onClick={() => addCard()}
-            className="px-5 py-2 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white rounded-lg text-sm font-semibold transition-all shadow-lg shadow-blue-900/20 flex items-center gap-2"
-          >
-            <Plus size={16} />
-            Add Card
-          </button>
-          <button
-            onClick={() => handleDownloadSheet()}
-            disabled={!activeSheet || cellsArray.length === 0}
-            className="px-5 py-2 bg-purple-600 hover:bg-purple-500 active:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition-all shadow-lg shadow-purple-900/20 flex items-center gap-2"
-            title="Download sheet as PDF"
-          >
-            <FileText size={16} />
-            Download Sheet
-          </button>
-          <button
-            onClick={() => setShowTemplates(true)}
-            className="px-5 py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 active:from-purple-700 active:to-pink-700 text-white rounded-lg text-sm font-semibold transition-all shadow-lg shadow-purple-900/20 flex items-center gap-2"
-            title="Use a template"
-          >
-            <Sparkles size={16} />
-            Templates
-          </button>
-          {/* User Menu */}
-          {user && (
+            {user && (
             <div className="relative user-menu-container">
               <button
                 onClick={() => setShowUserMenu(!showUserMenu)}
@@ -2124,7 +2165,7 @@ function App() {
               
               {/* User Menu Dropdown */}
               {showUserMenu && (
-                <div className="absolute right-0 top-full mt-2 w-56 glass-panel rounded-lg shadow-xl border border-white/10 overflow-hidden z-50">
+                <div className="absolute right-0 top-full mt-2 w-56 max-w-[min(18rem,calc(100vw-1.5rem))] glass-panel rounded-lg shadow-xl border border-white/10 overflow-hidden z-50">
                   <div className="p-3 border-b border-white/10">
                     <div className="flex items-center gap-3">
                       {user.photoURL ? (
@@ -2200,9 +2241,98 @@ function App() {
                 </div>
               )}
             </div>
-          )}
+            )}
+          </div>
+
         </div>
       </div>
+
+      {/* Mobile: hamburger slide-out drawer (fixed overlay) */}
+      {mobileMenuOpen && (
+        <div className="lg:hidden fixed inset-0 z-[100]">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/55 backdrop-blur-[2px]"
+            aria-label="Close menu"
+            onClick={() => setMobileMenuOpen(false)}
+          />
+          <div
+            id="mobile-nav-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mobile-nav-title"
+            className="mobile-drawer-panel absolute inset-y-0 right-0 flex w-[min(20rem,100%)] max-w-[min(20rem,calc(100vw-env(safe-area-inset-left)-env(safe-area-inset-right)))] flex-col border-l border-white/10 bg-gray-950/95 shadow-2xl backdrop-blur-xl pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]"
+          >
+            <div className="flex items-center justify-between gap-2 border-b border-white/10 px-4 py-3 shrink-0">
+              <h2 id="mobile-nav-title" className="text-base font-semibold text-white">
+                Menu
+              </h2>
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen(false)}
+                className="p-2 rounded-lg hover:bg-white/10 text-gray-300 touch-manipulation"
+                aria-label="Close menu"
+              >
+                <X size={22} />
+              </button>
+            </div>
+            <nav className="flex-1 overflow-y-auto overscroll-contain px-3 py-3 space-y-2 [-webkit-overflow-scrolling:touch]">
+              {connectingSource && (
+                <div className="px-3 py-2 bg-blue-500/20 border border-blue-500/30 rounded-lg text-xs text-blue-200">
+                  Select another card to complete the connection.
+                </div>
+              )}
+              {user && currentProjectId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigate('/projects');
+                    setMobileMenuOpen(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-3 py-3 rounded-xl bg-white/5 border border-white/10 text-sm text-gray-100 text-left touch-manipulation"
+                >
+                  <FolderOpen size={20} className="shrink-0 text-blue-300" />
+                  Projects
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  addCard();
+                  setMobileMenuOpen(false);
+                }}
+                className="w-full flex items-center gap-3 px-3 py-3 rounded-xl bg-blue-600 text-white text-sm font-semibold text-left touch-manipulation"
+              >
+                <Plus size={20} className="shrink-0" />
+                Add Card
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  handleDownloadSheet();
+                  setMobileMenuOpen(false);
+                }}
+                disabled={!activeSheet || cellsArray.length === 0}
+                className="w-full flex items-center gap-3 px-3 py-3 rounded-xl bg-purple-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-sm font-semibold text-left touch-manipulation"
+              >
+                <FileText size={20} className="shrink-0" />
+                Download PDF
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowTemplates(true);
+                  setMobileMenuOpen(false);
+                }}
+                className="w-full flex items-center gap-3 px-3 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 text-white text-sm font-semibold text-left touch-manipulation"
+              >
+                <Sparkles size={20} className="shrink-0" />
+                Templates
+              </button>
+            </nav>
+          </div>
+        </div>
+      )}
 
       {/* Main Content (Canvas) */}
       <div className="flex-1 overflow-hidden relative">
@@ -2232,7 +2362,7 @@ function App() {
       </div>
 
       {/* Footer / Tabs */}
-      <div className="h-12 glass-panel border-t-0 border-b border-l-0 border-r-0 flex items-center px-4 overflow-x-auto z-50 relative gap-2">
+      <div className="min-h-12 glass-panel border-t-0 border-b border-l-0 border-r-0 flex items-center px-3 sm:px-4 overflow-x-auto z-50 relative gap-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] [-webkit-overflow-scrolling:touch]">
         <button
           onClick={handleCreateSheet}
           className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
@@ -2349,7 +2479,7 @@ function App() {
 
       {/* Notification Toast */}
       {notification && (
-        <div className="fixed top-4 right-4 z-50 max-w-md transition-all duration-300 ease-in-out">
+        <div className="fixed top-4 left-3 right-3 sm:left-auto sm:right-4 sm:w-auto z-50 max-w-md sm:max-w-md mx-auto sm:mx-0 transition-all duration-300 ease-in-out">
           <div className={`rounded-lg shadow-xl border p-4 backdrop-blur-sm ${
             notification.type === 'error' 
               ? 'bg-red-900/95 border-red-700 text-white' 

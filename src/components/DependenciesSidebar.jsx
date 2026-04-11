@@ -14,7 +14,7 @@ const DependenciesSidebar = ({ cells, connections }) => {
     });
 
     return (
-        <div className="absolute top-0 right-0 h-full w-64 bg-gray-900/80 backdrop-blur-sm text-gray-200 p-4 overflow-y-auto glass-panel">
+        <div className="absolute z-40 max-md:inset-x-0 max-md:bottom-0 max-md:top-auto max-md:h-[min(50vh,22rem)] max-md:w-full max-md:rounded-t-2xl max-md:border-b-0 max-md:border-t md:top-0 md:right-0 md:h-full md:w-64 md:rounded-none bg-gray-900/80 backdrop-blur-sm text-gray-200 p-4 overflow-y-auto glass-panel">
             <h2 className="text-lg font-semibold mb-4">Dependencies</h2>
             {cells.map(cell => (
                 <div key={cell.cell_id} className="mb-3 border-b border-gray-700 pb-2">

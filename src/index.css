@@ -12,10 +12,30 @@
   body {
     @apply h-full w-full overflow-hidden antialiased;
     font-family: var(--font-sans);
+    /* iOS safe areas for notched devices */
+    padding-left: env(safe-area-inset-left, 0);
+    padding-right: env(safe-area-inset-right, 0);
   }
 }
 
 @layer utilities {
+  .safe-area-pt {
+    padding-top: max(0.5rem, env(safe-area-inset-top, 0px));
+  }
+
+  @keyframes mobile-drawer-in {
+    from {
+      transform: translateX(100%);
+    }
+    to {
+      transform: translateX(0);
+    }
+  }
+
+  .mobile-drawer-panel {
+    animation: mobile-drawer-in 0.22s ease-out forwards;
+  }
+
   .glass-panel {
     @apply bg-white/10 backdrop-blur-md border border-white/20 shadow-xl;
   }
