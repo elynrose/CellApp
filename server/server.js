@@ -195,6 +195,7 @@ async function ollamaNativeChat(baseUrl, model, prompt, temperature) {
 
 /**
  * Lightweight GET probe for API key validation (no full generation).
+ * Many providers block or throttle requests without a User-Agent.
  */
 function httpOrHttpsGet(urlStr, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -207,13 +208,18 @@ function httpOrHttpsGet(urlStr, headers = {}) {
     }
     const lib = u.protocol === 'https:' ? https : http;
     const port = u.port ? Number(u.port) : (u.protocol === 'https:' ? 443 : 80);
+    const mergedHeaders = {
+      Accept: 'application/json',
+      'User-Agent': 'Cellulai-KeyProbe/1.0 (https://github.com/elynrose/CellApp)',
+      ...headers
+    };
     const req = lib.request(
       {
         hostname: u.hostname,
         port,
         path: u.pathname + u.search,
         method: 'GET',
-        headers: { ...headers },
+        headers: mergedHeaders,
         timeout: 15000
       },
       (res) => {
@@ -234,26 +240,75 @@ function httpOrHttpsGet(urlStr, headers = {}) {
   });
 }
 
+function isProbablyLocalUrl(urlStr) {
+  if (!urlStr || typeof urlStr !== 'string') return false;
+  try {
+    const u = new URL(urlStr.includes('://') ? urlStr : `http://${urlStr}`);
+    const h = u.hostname.toLowerCase();
+    return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h.endsWith('.local');
+  } catch {
+    return false;
+  }
+}
+
+/** True when this Node process likely runs on a cloud host (cannot reach user's LAN localhost). */
+function isCloudDeployment() {
+  return !!(
+    process.env.RAILWAY_ENVIRONMENT ||
+    process.env.RAILWAY_PROJECT_ID ||
+    process.env.RENDER ||
+    process.env.VERCEL ||
+    process.env.FLY_APP_NAME ||
+    (process.env.NODE_ENV === 'production' && !process.env.CELLAPP_ALLOW_LOCAL_KEY_PROBES)
+  );
+}
+
 async function probeProviderApiKey(provider, apiKey, baseUrl) {
   const k = typeof apiKey === 'string' ? apiKey.trim() : '';
   const b = typeof baseUrl === 'string' ? baseUrl.trim() : '';
+
+  if ((provider === 'lmstudio' || provider === 'ollama') && isProbablyLocalUrl(b || '') && isCloudDeployment()) {
+    return {
+      ok: true,
+      message:
+        'Local URL cannot be reached from the hosted server. If LM Studio/Ollama runs on your machine, the key/URL is still fine for local use.'
+    };
+  }
+
   switch (provider) {
     case 'openai': {
       if (!k) throw new Error('API key is required');
-      const { status, body } = await httpOrHttpsGet('https://api.openai.com/v1/models', {
+      const { status, body } = await httpOrHttpsGet('https://api.openai.com/v1/models?limit=5', {
         Authorization: `Bearer ${k}`
       });
       if (status === 200) return { ok: true, message: 'OpenAI key is valid (listed models).' };
       if (status === 401) throw new Error('Invalid OpenAI API key (401).');
-      throw new Error(`OpenAI check failed (${status}): ${body.substring(0, 200)}`);
+      if (status === 403) {
+        return {
+          ok: true,
+          message:
+            'OpenAI accepted the key (403 on model list — common for org/billing restrictions). Try running a cell if generation still fails.'
+        };
+      }
+      if (status === 429) throw new Error('OpenAI rate limited this check (429). Try again in a minute.');
+      throw new Error(`OpenAI check failed (${status}): ${body.substring(0, 280)}`);
     }
     case 'gemini': {
       if (!k) throw new Error('API key is required');
-      const u = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(k)}`;
-      const { status, body } = await httpOrHttpsGet(u);
-      if (status === 200) return { ok: true, message: 'Gemini key is valid.' };
-      if (status === 400 || status === 403) throw new Error('Invalid or restricted Gemini API key.');
-      throw new Error(`Gemini check failed (${status}): ${body.substring(0, 200)}`);
+      const tryUrls = [
+        `https://generativelanguage.googleapis.com/v1/models?key=${encodeURIComponent(k)}`,
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(k)}`
+      ];
+      let lastErr = '';
+      for (const u of tryUrls) {
+        const { status, body } = await httpOrHttpsGet(u);
+        if (status === 200) return { ok: true, message: 'Gemini key is valid.' };
+        lastErr = `${status}: ${body.substring(0, 180)}`;
+        if (status === 401 || status === 403) {
+          throw new Error('Invalid or restricted Gemini API key.');
+        }
+      }
+      throw new Error(`Gemini check failed: ${lastErr}`);
     }
     case 'openrouter': {
       if (!k) throw new Error('API key is required');
@@ -264,27 +319,31 @@ async function probeProviderApiKey(provider, apiKey, baseUrl) {
       });
       if (status === 200) return { ok: true, message: 'OpenRouter key is valid.' };
       if (status === 401 || status === 403) throw new Error('Invalid OpenRouter API key.');
-      throw new Error(`OpenRouter check failed (${status}): ${body.substring(0, 200)}`);
+      if (status === 429) throw new Error('OpenRouter rate limited (429). Try again shortly.');
+      throw new Error(`OpenRouter check failed (${status}): ${body.substring(0, 280)}`);
     }
     case 'grok': {
       if (!k) throw new Error('API key is required');
-      const { status, body } = await httpOrHttpsGet('https://api.x.ai/v1/models', {
-        Authorization: `Bearer ${k}`
-      });
-      if (status === 200) return { ok: true, message: 'xAI (Grok) key is valid.' };
-      if (status === 401 || status === 403) throw new Error('Invalid xAI API key.');
-      throw new Error(`xAI check failed (${status}): ${body.substring(0, 200)}`);
+      const urls = ['https://api.x.ai/v1/models', 'https://api.x.ai/v1/language-models'];
+      let last = '';
+      for (const url of urls) {
+        const { status, body } = await httpOrHttpsGet(url, {
+          Authorization: `Bearer ${k}`
+        });
+        if (status === 200) return { ok: true, message: 'xAI (Grok) key is valid.' };
+        last = `${url} → ${status}: ${body.substring(0, 120)}`;
+        if (status === 401 || status === 403) throw new Error('Invalid xAI API key.');
+      }
+      throw new Error(`xAI check failed: ${last}`);
     }
     case 'fal': {
       if (!k) throw new Error('API key is required');
-      const { status, body } = await httpOrHttpsGet('https://rest.fal.ai/v1/models', {
+      const { status, body } = await httpOrHttpsGet('https://api.fal.ai/v1/models?limit=5', {
         Authorization: `Key ${k}`
       });
       if (status === 200) return { ok: true, message: 'Fal key is valid.' };
       if (status === 401 || status === 403) throw new Error('Invalid Fal API key.');
-      throw new Error(
-        `Fal check returned ${status}. If the service changed, save the key and verify with a real job. ${body.substring(0, 120)}`
-      );
+      throw new Error(`Fal check failed (${status}): ${body.substring(0, 280)}`);
     }
     case 'lmstudio': {
       const root = (b || 'http://127.0.0.1:1234').replace(/\/$/, '');
@@ -294,13 +353,16 @@ async function probeProviderApiKey(provider, apiKey, baseUrl) {
       if (k) headers.Authorization = `Bearer ${k}`;
       const { status, body } = await httpOrHttpsGet(url, headers);
       if (status === 200) return { ok: true, message: 'LM Studio server responded (OpenAI-compatible).' };
-      throw new Error(`LM Studio check failed (${status}): ${body.substring(0, 200)}`);
+      if (status === 401 && !k) {
+        throw new Error('LM Studio returned 401 — add an API key if your server requires one.');
+      }
+      throw new Error(`LM Studio check failed (${status}): ${body.substring(0, 280)}`);
     }
     case 'ollama': {
       const root = (b || 'http://127.0.0.1:11434').replace(/\/$/, '');
       const { status, body } = await httpOrHttpsGet(`${root}/api/tags`);
       if (status === 200) return { ok: true, message: 'Ollama server is reachable.' };
-      throw new Error(`Ollama check failed (${status}): ${body.substring(0, 200)}`);
+      throw new Error(`Ollama check failed (${status}): ${body.substring(0, 280)}`);
     }
     default:
       throw new Error(`Unknown provider: ${provider}`);
