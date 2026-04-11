@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { onAuthStateChange, getCurrentUser } from './firebase/auth';
-import { getProjects, createProject, getSheets, createSheet, deleteSheet, updateSheet, getSheetCells, saveCell, getActiveModels, deleteCell, getUserSubscription } from './firebase/firestore';
+import { onAuthStateChange } from './firebase/auth';
+import { getProjects, createProject, getSheets, createSheet, updateSheet, getSheetCells, saveCell, getActiveModels, deleteCell, getUserSubscription } from './firebase/firestore';
 import { resolveTemplateForGoal } from './services/orchestrator';
-import { runCell, runCells, formatOutput, pollJobStatus, cancelPolling } from './services/cellExecution';
+import { runCell, pollJobStatus, cancelPolling } from './services/cellExecution';
 import { parseDependencies, findDependentCells } from './utils/dependencies';
 import { getModelType } from './api';
 import Canvas from './components/Canvas';
@@ -21,7 +21,7 @@ function App() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [projects, setProjects] = useState([]);
+  const [, setProjects] = useState([]);
   const [currentProjectId, setCurrentProjectId] = useState(null);
   const [sheets, setSheets] = useState([]);
   const [activeSheet, setActiveSheet] = useState(null);
@@ -29,7 +29,7 @@ function App() {
   const [connections, setConnections] = useState([]);
   const [availableModels, setAvailableModels] = useState([]);
   const [defaultModel, setDefaultModel] = useState('gpt-3.5-turbo');
-  const [defaultTemperature, setDefaultTemperature] = useState(0.7);
+  const defaultTemperature = 0.7;
   const [connectingSource, setConnectingSource] = useState(null);
   const [runningCells, setRunningCells] = useState(new Set());
   const [showAdmin, setShowAdmin] = useState(false);
@@ -78,7 +78,6 @@ function App() {
   const autoRunQueueRef = useRef([]);
   const isProcessingAutoRunRef = useRef(false);
   // Track polling timeouts to allow cancellation
-  const pollingTimeoutsRef = useRef({});
 
   // Initialize auth state
   useEffect(() => {
@@ -147,7 +146,6 @@ function App() {
           if (now >= nextResetDate) {
             // Credits need reset - this will be handled by cellExecution when user tries to generate
             // But we can trigger it here for immediate UI update
-            const { checkAndResetUserCredits } = await import('./utils/creditReset');
             const { getPlanById } = await import('./services/subscriptions');
             const planId = subscriptionData.subscription || 'free';
             const plan = await getPlanById(planId);
@@ -418,8 +416,6 @@ function App() {
                 }
               }
             });
-            // Store timeout reference for this cell's polling
-            pollingTimeoutsRef.current[cellId] = pollPromise;
           }
         });
       }
@@ -736,7 +732,7 @@ function App() {
     isProcessingAutoRunRef.current = true;
 
     while (autoRunQueueRef.current.length > 0) {
-      const { cellId, output, cell: updatedCell } = autoRunQueueRef.current.shift();
+      const { cellId } = autoRunQueueRef.current.shift();
       
       // Wait a bit for state to propagate
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -811,8 +807,6 @@ function App() {
 
   // Debounce timer for position saves during dragging
   const positionSaveTimers = useRef({});
-  // Track if we're currently dragging to avoid saves during drag
-  const isDraggingRef = useRef(false);
 
   const handleDeleteCell = async (cellId) => {
     if (!user || !currentProjectId || !activeSheet) return;
@@ -1341,33 +1335,6 @@ function App() {
         runningCellsRef.current = next; // Keep ref in sync
         return next;
       });
-    }
-  };
-
-  const handleRunAllCells = async () => {
-    if (!user || !currentProjectId || !activeSheet) return;
-
-    const cellIds = Object.keys(cells).filter(id => cells[id].prompt);
-    if (cellIds.length === 0) return;
-
-    try {
-      await runCells({
-        cellIds,
-        sheet: { ...activeSheet, cells },
-        userId: user.uid,
-        projectId: currentProjectId,
-        sheetId: activeSheet.id,
-        sheets: sheets.map(s => ({
-          ...s,
-          cells: s.id === activeSheet.id ? cells : {}
-        })),
-        onProgress: ({ status, cellId, output, error }) => {
-          if (status === 'complete' && output) {
-            handleCellUpdate(cellId, undefined, output);
-          }
-        }
-      });
-    } catch (error) {
     }
   };
 
@@ -2342,7 +2309,7 @@ function App() {
           <Plus size={18} />
         </button>
         <div className="h-6 w-px bg-white/10 mx-2"></div>
-        {sheets.map((sheet, index) => (
+        {sheets.map((sheet) => (
           <div
             key={sheet.id}
             draggable
