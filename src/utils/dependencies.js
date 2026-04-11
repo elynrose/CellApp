@@ -144,7 +144,8 @@ export async function resolveCellReference(reference, context) {
     projectId,
     runningCellsSet,
     getLatestCells,
-    disableAlerts
+    disableAlerts,
+    skipClientGenerationFetch
   } = context;
   
   // Debug: Log the reference being resolved
@@ -330,7 +331,12 @@ export async function resolveCellReference(reference, context) {
     // NOTE: Removed waiting logic - cells just use whatever value is available
 
     // Load generations from Firestore if needed (for generation-specific references)
-    if (generationSpec && (!generations || generations.length === 0)) {
+    // skipClientGenerationFetch: server/Node runs must not import the browser Firebase SDK
+    if (
+      generationSpec &&
+      (!generations || generations.length === 0) &&
+      !skipClientGenerationFetch
+    ) {
       // Try to load generations from Firestore
       try {
         const { getGenerations } = await import('../firebase/firestore');

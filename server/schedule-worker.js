@@ -119,10 +119,19 @@ async function processDueJobs(firestore) {
       n += 1;
     } catch (e) {
       console.error('schedule job failed', docSnap.id, e.message);
-      await docSnap.ref.update({
-        lastError: e.message,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
+      try {
+        const nextIso = nextFireIso(cronExpression, timeZone);
+        await docSnap.ref.update({
+          lastError: e.message,
+          nextRunAt: admin.firestore.Timestamp.fromDate(new Date(nextIso)),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+      } catch (e2) {
+        await docSnap.ref.update({
+          lastError: e.message,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+      }
     }
   }
   return n;

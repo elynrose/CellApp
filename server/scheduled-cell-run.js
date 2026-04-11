@@ -6,6 +6,7 @@
 const path = require('path');
 const { pathToFileURL } = require('url');
 const admin = require('firebase-admin');
+const { initializeFirebase, getGeminiApiKey } = require('./firebase-server-config');
 
 let resolveDependenciesFn = null;
 
@@ -39,6 +40,26 @@ function getCreditCost(modelType, modelId = '') {
   if (modelType === 'video') return 20;
   if (modelType === 'audio') return id.includes('hd') ? 3 : 2;
   return 1;
+}
+
+async function getGeminiKeyForScheduledRun(firestore, userId) {
+  const userDoc = await firestore.collection('users').doc(userId).get();
+  if (userDoc.exists) {
+    const g = userDoc.data()?.geminiApiKey;
+    if (g && String(g).trim()) return { key: String(g).trim() };
+  }
+  await initializeFirebase();
+  const k = await getGeminiApiKey();
+  if (k && String(k).trim()) {
+    const userDoc2 = await firestore.collection('users').doc(userId).get();
+    const sub = userDoc2.exists ? userDoc2.data()?.subscription || 'free' : 'free';
+    const isPro = sub === 'pro' || sub === 'enterprise';
+    if (!isPro) {
+      throw new Error('Pro subscription or user Gemini API key required for scheduled Gemini runs');
+    }
+    return { key: String(k).trim() };
+  }
+  return { key: null };
 }
 
 async function getOpenAiKeyForUser(firestore, userId) {
@@ -75,6 +96,29 @@ async function deductCreditsTx(firestore, userId, amount) {
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     });
   });
+}
+
+async function callGeminiText(apiKey, model, prompt, temperature, maxTokens) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+    model
+  )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const body = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature,
+      maxOutputTokens: maxTokens && maxTokens > 0 ? maxTokens : 2048
+    }
+  };
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error?.message || `Gemini ${res.status}`);
+  }
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 }
 
 async function callOpenAiText(apiKey, model, prompt, temperature, maxTokens) {
@@ -115,6 +159,9 @@ async function runScheduledCellExecution(firestore, { userId, projectId, sheetId
   const cell = { cell_id: cellId, ...cellSnap.data() };
   if (!cell.prompt || !String(cell.prompt).trim()) {
     throw new Error('Cell has no prompt');
+  }
+  if (!cell.autoRun) {
+    throw new Error('autoRun must be enabled for scheduled runs');
   }
 
   const sheetsSnap = await firestore
@@ -181,7 +228,8 @@ async function runScheduledCellExecution(firestore, { userId, projectId, sheetId
     getLatestCells,
     getCell,
     loadSheetCells,
-    disableAlerts: true
+    disableAlerts: true,
+    skipClientGenerationFetch: true
   });
 
   let finalPrompt = resolvedPrompt;
@@ -215,11 +263,22 @@ async function runScheduledCellExecution(firestore, { userId, projectId, sheetId
     );
   }
 
-  const { key: apiKey } = await getOpenAiKeyForUser(firestore, userId);
-  if (!apiKey) throw new Error('No OpenAI API key available');
+  const idLower = String(model).toLowerCase();
+  const isGeminiText = idLower.includes('gemini') && !idLower.includes('imagen');
 
+  let output;
   const creditCost = getCreditCost(modelType, model);
-  const output = await callOpenAiText(apiKey, model, finalPrompt, temperature, maxTokens);
+
+  if (isGeminiText) {
+    const { key: gKey } = await getGeminiKeyForScheduledRun(firestore, userId);
+    if (!gKey) throw new Error('No Gemini API key configured for scheduled runs');
+    output = await callGeminiText(gKey, model, finalPrompt, temperature, maxTokens);
+  } else {
+    const { key: apiKey } = await getOpenAiKeyForUser(firestore, userId);
+    if (!apiKey) throw new Error('No OpenAI API key available');
+    output = await callOpenAiText(apiKey, model, finalPrompt, temperature, maxTokens);
+  }
+
   await deductCreditsTx(firestore, userId, creditCost);
 
   const generation = {
