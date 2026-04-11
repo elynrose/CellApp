@@ -1410,14 +1410,6 @@ function App() {
         getCellsMap: () => cellsRef.current,
         manualConnections: connections,
         sheetName: activeSheet.name || 'Sheet',
-        userId: user.uid,
-        projectId: currentProjectId,
-        sheetId: activeSheet.id,
-        sheets: sheets.map((s) => ({
-          ...s,
-          cells: s.id === activeSheet.id ? cellsRef.current : {}
-        })),
-        activeSheet,
         oversightModel: defaultModel,
         maxRounds: 6,
         runCellWithOversight: async (cellId, directive) => {

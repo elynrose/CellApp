@@ -12,7 +12,8 @@
     "server": "node server/server.js",
     "start": "node server/server.js",
     "build:server": "vite build && node scripts/sync-server-public.mjs",
-    "test:rules": "firebase emulators:exec --only firestore \"node ./tests/firestore.rules.test.mjs\""
+    "test:rules": "firebase emulators:exec --only firestore \"node ./tests/firestore.rules.test.mjs\"",
+    "test:newsletter": "node ./tests/newsletter-pipeline.test.mjs"
   },
   "engines": {
     "node": "20.x"

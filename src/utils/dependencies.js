@@ -7,7 +7,7 @@
  * Placeholders like {{genre}}, {{topic}} are left as-is.
  */
 
-import { resolveConditionalBlocks, extractConditionDependencies } from './conditions';
+import { resolveConditionalBlocks, extractConditionDependencies } from './conditions.js';
 
 /**
  * Check if a string is a valid cell reference format (e.g., A1, B1, C2, etc.)
@@ -102,6 +102,61 @@ export function parseDependencies(prompt) {
 }
 
 /**
+ * Topological order for a subset of cell IDs based on {{refs}} in prompts.
+ * Used by oversight orchestration and tests (e.g. newsletter pipeline ordering).
+ *
+ * @param {string[]} cellIds
+ * @param {Record<string, { prompt?: string }>} cellsMap
+ * @returns {string[]}
+ */
+export function orderCellsByPromptDeps(cellIds, cellsMap) {
+  const ids = new Set(cellIds);
+  const adj = new Map();
+  const indeg = new Map();
+
+  for (const id of cellIds) {
+    adj.set(id, []);
+    indeg.set(id, 0);
+  }
+
+  for (const id of cellIds) {
+    const cell = cellsMap[id];
+    if (!cell?.prompt) continue;
+    const deps = parseDependencies(cell.prompt);
+    for (const dep of deps) {
+      let ref = dep;
+      if (ref.includes(':')) ref = ref.split(':')[1];
+      if (ref.includes('!')) ref = ref.split('!')[1];
+      if (ref.includes('-')) ref = ref.split('-')[0];
+      if (ref.includes(':')) ref = ref.split(':')[0];
+      ref = ref.trim();
+      if (ids.has(ref) && ref !== id) {
+        adj.get(ref).push(id);
+        indeg.set(id, (indeg.get(id) || 0) + 1);
+      }
+    }
+  }
+
+  const queue = [];
+  for (const id of cellIds) {
+    if ((indeg.get(id) || 0) === 0) queue.push(id);
+  }
+  const out = [];
+  while (queue.length) {
+    const u = queue.shift();
+    out.push(u);
+    for (const v of adj.get(u) || []) {
+      indeg.set(v, indeg.get(v) - 1);
+      if (indeg.get(v) === 0) queue.push(v);
+    }
+  }
+  if (out.length !== cellIds.length) {
+    return [...cellIds];
+  }
+  return out;
+}
+
+/**
  * Extract cell references from a value string
  * @param {string} value - Value string that may contain {{...}} references
  * @returns {string[]} Array of cell references
@@ -142,8 +197,8 @@ export async function resolveCellReference(reference, context) {
     loadSheetCells,
     userId,
     projectId,
-    runningCellsSet,
-    getLatestCells,
+    runningCellsSet: _runningCellsSet,
+    getLatestCells: _getLatestCells,
     disableAlerts,
     skipClientGenerationFetch
   } = context;
@@ -156,12 +211,10 @@ export async function resolveCellReference(reference, context) {
     // First, check if this is a valid cell reference format
     // If not, return the original reference (it's likely a placeholder like {{genre}})
     let cellPart = reference;
-    let hasTypePrefix = false;
-    
+
     // Check if it has a type prefix (prompt:, output:)
     if (reference.includes(':') && (reference.startsWith('prompt:') || reference.startsWith('output:'))) {
       cellPart = reference.split(':')[1];
-      hasTypePrefix = true;
     }
     
     // Extract cell ID from cross-sheet references
@@ -188,7 +241,6 @@ export async function resolveCellReference(reference, context) {
     let cellId = reference;
     let returnType = 'output'; // default to output (for same-sheet references)
     let generationSpec = null; // for generation-specific references
-    let isCrossSheetRef = false; // Track if this is a cross-sheet reference
 
     // Step 1: Check for explicit type specification (prompt: or output:)
     let remainingRef = reference;
@@ -200,7 +252,6 @@ export async function resolveCellReference(reference, context) {
 
     // Step 2: Check if it's a cross-sheet reference (SheetName!CellId)
     if (remainingRef.includes('!')) {
-      isCrossSheetRef = true;
       // For cross-sheet references, default to prompt (textarea value) unless explicitly specified
       // Check if user explicitly specified output: or prompt: prefix
       const hasExplicitType = reference.startsWith('prompt:') || reference.startsWith('output:');
@@ -315,20 +366,8 @@ export async function resolveCellReference(reference, context) {
 
     // NOTE: We do not wait for running cells here — we use whatever value is available
     // (even if empty) to avoid blocking and to keep execution responsive.
-    
-    // Also verify cell has output after waiting
-    // If it still doesn't have output after the dependency finished, wait a bit more for state to propagate
-    const hasOutput = cell.output && 
-                     cell.output.trim() !== '' && 
-                     !cell.output.includes('No generations yet') &&
-                     !cell.output.includes('ERROR') &&
-                     !cell.output.includes('[ERROR');
-    
+
     let generations = cell.generations || [];
-    const latestGeneration = generations.length > 0 ? generations[generations.length - 1] : null;
-    const hasCompletedGeneration = latestGeneration && latestGeneration.status === 'completed';
-    
-    // NOTE: Removed waiting logic - cells just use whatever value is available
 
     // Load generations from Firestore if needed (for generation-specific references)
     // skipClientGenerationFetch: server/Node runs must not import the browser Firebase SDK
@@ -354,7 +393,7 @@ export async function resolveCellReference(reference, context) {
             cell.generations = generations;
           }
         }
-      } catch (error) {
+      } catch {
       }
     }
 
@@ -586,11 +625,9 @@ export function hasCircularDependency(cellId, sheets, visited = new Set()) {
 
   // Find the cell
   let cell = null;
-  let sheet = null;
   for (const s of sheets) {
     if (s.cells?.[cellId]) {
       cell = s.cells[cellId];
-      sheet = s;
       break;
     }
   }

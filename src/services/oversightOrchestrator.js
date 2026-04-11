@@ -4,7 +4,7 @@
  */
 
 import { generateAI, getModelType } from '../api';
-import { parseDependencies } from '../utils/dependencies';
+import { orderCellsByPromptDeps } from '../utils/dependencies';
 import { mergeConnections, generateConnectionsFromDependencies } from '../utils/connections';
 
 const DEFAULT_MODEL = 'gpt-4o-mini';
@@ -35,56 +35,6 @@ function parseJsonFromText(text) {
     }
   }
   return null;
-}
-
-/**
- * Topological order for a subset of cell IDs based on {{refs}} in prompts.
- */
-function orderCellsByPromptDeps(cellIds, cellsMap) {
-  const ids = new Set(cellIds);
-  const adj = new Map();
-  const indeg = new Map();
-
-  for (const id of cellIds) {
-    adj.set(id, []);
-    indeg.set(id, 0);
-  }
-
-  for (const id of cellIds) {
-    const cell = cellsMap[id];
-    if (!cell?.prompt) continue;
-    const deps = parseDependencies(cell.prompt);
-    for (const dep of deps) {
-      let ref = dep;
-      if (ref.includes(':')) ref = ref.split(':')[1];
-      if (ref.includes('!')) ref = ref.split('!')[1];
-      if (ref.includes('-')) ref = ref.split('-')[0];
-      if (ref.includes(':')) ref = ref.split(':')[0];
-      ref = ref.trim();
-      if (ids.has(ref) && ref !== id) {
-        adj.get(ref).push(id);
-        indeg.set(id, (indeg.get(id) || 0) + 1);
-      }
-    }
-  }
-
-  const queue = [];
-  for (const id of cellIds) {
-    if ((indeg.get(id) || 0) === 0) queue.push(id);
-  }
-  const out = [];
-  while (queue.length) {
-    const u = queue.shift();
-    out.push(u);
-    for (const v of adj.get(u) || []) {
-      indeg.set(v, indeg.get(v) - 1);
-      if (indeg.get(v) === 0) queue.push(v);
-    }
-  }
-  if (out.length !== cellIds.length) {
-    return [...cellIds];
-  }
-  return out;
 }
 
 function buildSnapshot(cellsMap, connections, sheetName) {
@@ -194,11 +144,6 @@ export async function fetchOversightPlan({
  * @param {() => object} params.getCellsMap - latest cells object
  * @param {Array} params.manualConnections
  * @param {string} params.sheetName
- * @param {string} params.userId
- * @param {string} params.projectId
- * @param {string} params.sheetId
- * @param {Array} params.sheets - for runCell
- * @param {object} params.activeSheet - with id
  * @param {function} params.runCellWithOversight - async (cellId, oversightDirective, meta) => runCell result
  * @param {number} params.maxRounds
  * @param {function} [params.onProgress]
@@ -208,11 +153,6 @@ export async function runOversightOrchestration({
   getCellsMap,
   manualConnections = [],
   sheetName = '',
-  userId,
-  projectId,
-  sheetId,
-  sheets,
-  activeSheet,
   runCellWithOversight,
   maxRounds = 5,
   onProgress,
