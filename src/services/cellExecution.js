@@ -10,6 +10,7 @@ import { saveCell, saveGeneration, deductCredits, getUserSubscription, resetMont
 import { optimizePrompt, shouldOptimizePrompt } from '../utils/promptOptimizer';
 import { uploadImageFromUrl, uploadVideoFromUrl, uploadAudioFromUrl } from '../firebase/storage';
 import { getCreditCost, hasEnoughCredits, getPlanById } from '../services/subscriptions';
+import { runCellAgentExecution } from './cellAgent';
 
 /**
  * Get format instructions based on output format setting
@@ -371,7 +372,9 @@ export async function runCell({
   currentSheet,
   onProgress,
   getLatestCells = null, // Optional function to get latest cell state
-  runningCellsSet = null // Optional Set of currently running cell IDs
+  runningCellsSet = null, // Optional Set of currently running cell IDs
+  onHandoffDownstream = null, // Optional (targetIds, meta) => Promise when agent fans out to neighbors
+  manualConnections = [] // Canvas edges { source_cell_id, target_cell_id } for agent context
 }) {
   try {
     if (onProgress) onProgress({ status: 'resolving', cellId });
@@ -436,6 +439,90 @@ export async function runCell({
         skipped: true,
         output: '[Cell execution skipped due to condition]'
       };
+    }
+
+    // Agentic mode: plan → multi-step execution → critique → synthesize → optional downstream handoff
+    if (cell.agentMode) {
+      pendingGeneration.status = 'running';
+      if (onProgress) onProgress({ status: 'generating', cellId });
+      try {
+        const agentResult = await runCellAgentExecution({
+          cellId,
+          cell,
+          userId,
+          projectId,
+          sheetId,
+          sheets,
+          currentSheet,
+          getLatestCells,
+          runningCellsSet,
+          manualConnections,
+          onHandoffDownstream,
+          onProgress
+        });
+
+        const userPrompt = cell.prompt || '';
+        const generation = {
+          ...pendingGeneration,
+          prompt: userPrompt,
+          resolvedPrompt: agentResult.resolvedPrompt || '',
+          output: agentResult.output,
+          model: cell.model || 'gpt-3.5-turbo',
+          temperature: cell.temperature ?? 0.7,
+          type: getModelType(cell.model || 'gpt-3.5-turbo'),
+          status: 'completed',
+          agentMode: true,
+          agentLog: agentResult.agentLog,
+          timestamp: pendingGeneration.timestamp
+        };
+
+        const updatedCell = {
+          ...cell,
+          output: agentResult.output,
+          model: cell.model || 'gpt-3.5-turbo',
+          temperature: cell.temperature ?? 0.7,
+          generations: [...(cell.generations || []), generation],
+          updatedAt: new Date()
+        };
+
+        await saveCell(userId, projectId, sheetId, cellId, updatedCell);
+        await saveGeneration(userId, projectId, sheetId, cellId, generation);
+
+        if (onProgress) onProgress({ status: 'complete', cellId, output: agentResult.output, updatedCell });
+
+        return {
+          success: true,
+          cellId,
+          output: agentResult.output,
+          generation,
+          agentMode: true
+        };
+      } catch (agentErr) {
+        console.error(`Agent mode failed for cell ${cellId}:`, agentErr);
+        const errorGeneration = {
+          prompt: cell.prompt || '',
+          resolvedPrompt: '',
+          output: '',
+          model: cell.model || 'gpt-3.5-turbo',
+          temperature: cell.temperature ?? 0.7,
+          type: getModelType(cell.model || 'gpt-3.5-turbo'),
+          status: 'error',
+          agentMode: true,
+          error: agentErr.message,
+          timestamp: new Date()
+        };
+        const updatedCell = {
+          ...cell,
+          generations: [...(cell.generations || []), errorGeneration],
+          updatedAt: new Date()
+        };
+        if (userId && projectId && sheetId) {
+          await saveCell(userId, projectId, sheetId, cellId, updatedCell);
+          await saveGeneration(userId, projectId, sheetId, cellId, errorGeneration);
+        }
+        if (onProgress) onProgress({ status: 'error', cellId, error: agentErr.message });
+        return { success: false, cellId, error: agentErr.message, agentMode: true };
+      }
     }
     
     // Update generation status to 'running'

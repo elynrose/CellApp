@@ -8,6 +8,7 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
     const [model, setModel] = useState(cell?.model || 'gpt-3.5-turbo');
     const [temperature, setTemperature] = useState(cell?.temperature ?? 0.7);
     const [autoRun, setAutoRun] = useState(cell?.autoRun ?? false);
+    const [agentMode, setAgentMode] = useState(cell?.agentMode ?? false);
     const [interval, setInterval] = useState(cell?.interval ?? 0);
     const [prompt, setPrompt] = useState(cell?.prompt || '');
     const [cellPrompt, setCellPrompt] = useState(cell?.cellPrompt || '');
@@ -47,6 +48,7 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
             const newModel = cell.model || 'gpt-3.5-turbo';
             const newTemperature = cell.temperature ?? 0.7;
             const newAutoRun = cell.autoRun ?? false;
+            const newAgentMode = cell.agentMode ?? false;
             const newInterval = cell.interval ?? 0;
             const newPrompt = cell.prompt || '';
             const newCellPrompt = cell.cellPrompt || '';
@@ -67,6 +69,7 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
             setModel(prev => prev !== newModel ? newModel : prev);
             setTemperature(prev => prev !== newTemperature ? newTemperature : prev);
             setAutoRun(prev => prev !== newAutoRun ? newAutoRun : prev);
+            setAgentMode(prev => prev !== newAgentMode ? newAgentMode : prev);
             setInterval(prev => prev !== newInterval ? newInterval : prev);
             setPrompt(prev => prev !== newPrompt ? newPrompt : prev);
             setCellPrompt(prev => prev !== newCellPrompt ? newCellPrompt : prev);
@@ -80,7 +83,7 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
             setAudioFormat(prev => prev !== newAudioFormat ? newAudioFormat : prev);
             setCondition(prev => prev !== newCondition ? newCondition : prev);
         }
-    }, [cell?.cell_id, cell?.model, cell?.temperature, cell?.autoRun, cell?.interval, cell?.prompt, cell?.cellPrompt, cell?.characterLimit, cell?.outputFormat, cell?.videoSeconds, cell?.videoResolution, cell?.videoAspectRatio, cell?.audioVoice, cell?.audioSpeed, cell?.audioFormat]);
+    }, [cell?.cell_id, cell?.model, cell?.temperature, cell?.autoRun, cell?.agentMode, cell?.interval, cell?.prompt, cell?.cellPrompt, cell?.characterLimit, cell?.outputFormat, cell?.videoSeconds, cell?.videoResolution, cell?.videoAspectRatio, cell?.audioVoice, cell?.audioSpeed, cell?.audioFormat]);
 
     const loadModels = async () => {
         try {
@@ -102,6 +105,7 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
             model: model || cell?.model || 'gpt-3.5-turbo',
             temperature: temperature ?? 0.7,
             autoRun: autoRun ?? false,
+            agentMode: agentMode ?? false,
             interval: interval > 0 ? interval : 0,
             prompt: prompt || '',
             cellPrompt: cellPrompt || '',
@@ -398,31 +402,47 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
                             </div>
                         </div>
                     )}
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-3">
                         <div>
                             <label className="flex items-center gap-2">
                                 <input
                                     type="checkbox"
-                                    checked={autoRun}
-                                    onChange={(e) => setAutoRun(e.target.checked)}
+                                    checked={agentMode}
+                                    onChange={(e) => setAgentMode(e.target.checked)}
                                     className="rounded"
                                 />
-                                <span className="text-sm">Auto-run when dependencies change</span>
+                                <span className="text-sm">Agent mode (plan, critique, fan-out)</span>
                             </label>
-                        </div>
-                        <div>
-                            <label className="block text-sm mb-1">Auto-run Interval (seconds)</label>
-                            <input
-                                type="number"
-                                min="0"
-                                value={interval}
-                                onChange={(e) => setInterval(parseInt(e.target.value, 10) || 0)}
-                                className="w-full bg-gray-800 rounded p-2 text-sm"
-                                placeholder="0 = disabled"
-                            />
-                            <p className="text-xs text-gray-400 mt-1">
-                                0 = disabled
+                            <p className="text-xs text-gray-400 mt-1 pl-6">
+                                Multi-step run with neighbor awareness; uses extra credits. Downstream cards need Auto-run to chain.
                             </p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="flex items-center gap-2">
+                                    <input
+                                        type="checkbox"
+                                        checked={autoRun}
+                                        onChange={(e) => setAutoRun(e.target.checked)}
+                                        className="rounded"
+                                    />
+                                    <span className="text-sm">Auto-run when dependencies change</span>
+                                </label>
+                            </div>
+                            <div>
+                                <label className="block text-sm mb-1">Auto-run Interval (seconds)</label>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    value={interval}
+                                    onChange={(e) => setInterval(parseInt(e.target.value, 10) || 0)}
+                                    className="w-full bg-gray-800 rounded p-2 text-sm"
+                                    placeholder="0 = disabled"
+                                />
+                                <p className="text-xs text-gray-400 mt-1">
+                                    0 = disabled
+                                </p>
+                            </div>
                         </div>
                     </div>
                     <div>

@@ -9,7 +9,7 @@ import { parseDependencies } from './dependencies';
  * Extract cell ID from a dependency reference
  * Handles formats like: "A1", "prompt:A1", "output:A1", "Sheet2!A1", "A1-1", "A1:1-3"
  */
-function extractCellIdFromReference(ref) {
+export function extractCellIdFromReference(ref) {
   if (!ref) return null;
 
   // Remove type prefix (prompt:, output:)
