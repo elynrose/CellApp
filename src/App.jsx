@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { onAuthStateChange, getCurrentUser } from './firebase/auth';
 import { getProjects, createProject, getSheets, createSheet, deleteSheet, updateSheet, getSheetCells, saveCell, getActiveModels, deleteCell, getUserSubscription } from './firebase/firestore';
+import { resolveTemplateForGoal } from './services/orchestrator';
 import { runCell, runCells, formatOutput, pollJobStatus, cancelPolling } from './services/cellExecution';
 import { parseDependencies, findDependentCells } from './utils/dependencies';
 import { getModelType } from './api';
 import Canvas from './components/Canvas';
-import { Plus, Box, Grid, Trash2, Play, LogOut, User, Shield, Crown, X, AlertCircle, Sparkles, Check, Edit2, GripVertical, ChevronDown, FolderOpen, Copy, FileText, Download } from 'lucide-react';
+import { Plus, Box, Grid, Trash2, Play, LogOut, User, Shield, Crown, X, AlertCircle, Sparkles, Check, Edit2, GripVertical, ChevronDown, FolderOpen, Copy, FileText, Download, Workflow } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { signInWithGoogle, signOutUser, isCurrentUserAdmin } from './firebase/auth';
 import AdminDashboard from './components/AdminDashboard';
@@ -39,6 +41,9 @@ function App() {
   const [notification, setNotification] = useState(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [showOrchestratorModal, setShowOrchestratorModal] = useState(false);
+  const [orchestratorPrompt, setOrchestratorPrompt] = useState('');
+  const [orchestratorRunning, setOrchestratorRunning] = useState(false);
 
   // Auto-dismiss notifications after 8 seconds
   useEffect(() => {
@@ -1431,6 +1436,10 @@ function App() {
       characterLimit: cellData.characterLimit !== undefined ? cellData.characterLimit : 0,
       outputFormat: cellData.outputFormat || '',
       autoRun: cellData.autoRun !== undefined ? cellData.autoRun : false,
+      interval: cellData.interval !== undefined ? cellData.interval : 0,
+      enableTools: cellData.enableTools ?? false,
+      enabledTools: cellData.enabledTools && typeof cellData.enabledTools === 'object' ? cellData.enabledTools : undefined,
+      schedule: cellData.schedule || null,
       name: cellData.name || '', // Display name/title - can be changed by user
       generations: []
     };
@@ -1442,6 +1451,85 @@ function App() {
       return cellId;
     } catch (error) {
       return null;
+    }
+  };
+
+  const clearCurrentSheetCells = async () => {
+    if (!user || !currentProjectId || !activeSheet) return;
+    const ids = Object.keys(cells);
+    for (const cellId of ids) {
+      try {
+        await deleteCell(user.uid, currentProjectId, activeSheet.id, cellId);
+      } catch {
+        // continue
+      }
+    }
+    flushSync(() => {
+      setCells({});
+      setConnections([]);
+    });
+    cellsRef.current = {};
+  };
+
+  const handleRunOrchestrator = async () => {
+    const goal = orchestratorPrompt.trim();
+    if (!goal || !user || !currentProjectId || !activeSheet) {
+      setNotification({
+        type: 'error',
+        title: 'Orchestrator',
+        message: 'Describe your task and ensure a sheet is open.',
+        showUpgrade: false
+      });
+      return;
+    }
+
+    setOrchestratorRunning(true);
+    try {
+      const hadCells = Object.keys(cells).length > 0;
+      if (hadCells) {
+        const ok = window.confirm(
+          'Replace all cards on this sheet with the workflow the orchestrator selects or creates?'
+        );
+        if (!ok) {
+          setOrchestratorRunning(false);
+          return;
+        }
+        await clearCurrentSheetCells();
+      }
+
+      const res = await resolveTemplateForGoal(goal, availableModels);
+      if (!res.success) {
+        setNotification({
+          type: 'error',
+          title: 'Orchestrator failed',
+          message: res.error || 'Could not build a workflow.',
+          showUpgrade: false
+        });
+        return;
+      }
+
+      await applyTemplate(res.template, { skipEmptySheetCheck: true });
+      const msg =
+        res.source === 'generated'
+          ? `Created workflow "${res.template.name}" (template saved) with ${res.template.cells.length} cards.`
+          : `Applied "${res.template.name}" (${res.template.cells.length} cards).`;
+      setNotification({
+        type: 'success',
+        title: 'Orchestrator',
+        message: msg,
+        showUpgrade: false
+      });
+      setShowOrchestratorModal(false);
+      setOrchestratorPrompt('');
+    } catch (e) {
+      setNotification({
+        type: 'error',
+        title: 'Orchestrator error',
+        message: e.message || 'Something went wrong.',
+        showUpgrade: false
+      });
+    } finally {
+      setOrchestratorRunning(false);
     }
   };
 
@@ -1470,12 +1558,13 @@ function App() {
     return activeModelsOfType[0].id || activeModelsOfType[0].originalId;
   };
 
-  const applyTemplate = async (template) => {
+  const applyTemplate = async (template, options = {}) => {
+    const { skipEmptySheetCheck = false } = options;
     if (!activeSheet || !user || !currentProjectId) return;
 
     // Check if the sheet already has cards
     const existingCellsCount = Object.keys(cells).length;
-    if (existingCellsCount > 0) {
+    if (!skipEmptySheetCheck && existingCellsCount > 0) {
       setNotification({
         type: 'error',
         title: 'Cannot Apply Template',
@@ -1540,6 +1629,10 @@ function App() {
           characterLimit: cellTemplate.characterLimit !== undefined ? cellTemplate.characterLimit : 0,
           outputFormat: cellTemplate.outputFormat || '',
           autoRun: cellTemplate.autoRun !== undefined ? cellTemplate.autoRun : false,
+          interval: cellTemplate.interval !== undefined ? cellTemplate.interval : 0,
+          enableTools: cellTemplate.enableTools ?? false,
+          enabledTools: cellTemplate.enabledTools || undefined,
+          schedule: cellTemplate.schedule || null,
           name: cellTemplate.name || ''
         }, cellId);
       }
@@ -2090,6 +2183,14 @@ function App() {
             Download Sheet
           </button>
           <button
+            onClick={() => setShowOrchestratorModal(true)}
+            className="px-5 py-2 bg-amber-700/90 hover:bg-amber-600 text-white rounded-lg text-sm font-semibold transition-all shadow-lg flex items-center gap-2 border border-amber-500/30"
+            title="Orchestrator: describe your task; we pick or create a template"
+          >
+            <Workflow size={16} />
+            Orchestrator
+          </button>
+          <button
             onClick={() => setShowTemplates(true)}
             className="px-5 py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 active:from-purple-700 active:to-pink-700 text-white rounded-lg text-sm font-semibold transition-all shadow-lg shadow-purple-900/20 flex items-center gap-2"
             title="Use a template"
@@ -2383,6 +2484,61 @@ function App() {
                 className="text-white/70 hover:text-white transition-colors"
               >
                 <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showOrchestratorModal && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-gray-900 border border-white/10 rounded-2xl max-w-lg w-full shadow-2xl p-6 space-y-4">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <Workflow className="text-amber-400" size={22} />
+                  Orchestrator
+                </h3>
+                <p className="text-sm text-gray-400 mt-1">
+                  Describe the task or workflow you want. We match an existing template when possible; otherwise we generate one, save it to your library, and place the cards on this sheet.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !orchestratorRunning && setShowOrchestratorModal(false)}
+                className="p-1 text-gray-400 hover:text-white shrink-0"
+                disabled={orchestratorRunning}
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">Task prompt</label>
+              <textarea
+                value={orchestratorPrompt}
+                onChange={(e) => setOrchestratorPrompt(e.target.value)}
+                rows={5}
+                disabled={orchestratorRunning}
+                placeholder="e.g. Daily AI newsletter with research, draft, subject lines, and email digest…"
+                className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white placeholder:text-gray-500"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => !orchestratorRunning && setShowOrchestratorModal(false)}
+                className="px-4 py-2 text-sm text-gray-300 hover:bg-white/5 rounded-lg"
+                disabled={orchestratorRunning}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleRunOrchestrator}
+                disabled={orchestratorRunning || !orchestratorPrompt.trim()}
+                className="px-4 py-2 text-sm font-medium bg-amber-600 hover:bg-amber-500 disabled:bg-gray-600 rounded-lg text-white"
+              >
+                {orchestratorRunning ? 'Working…' : 'Run'}
               </button>
             </div>
           </div>
