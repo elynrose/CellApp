@@ -140,15 +140,21 @@ async function getOpenAIApiKey() {
       return process.env.OPENAI_API_KEY;
     }
 
-    // Get OpenAI configuration from Firebase
-    const doc = await firestore.collection('settings').doc('openai').get();
-    
-    if (doc.exists) {
-      const data = doc.data();
-      const apiKey = data.apiKey;
-      
+    // Legacy: settings/openai; preferred for admin UI: admin/openai (Firestore rules allow admin writes there)
+    const settingsDoc = await firestore.collection('settings').doc('openai').get();
+    if (settingsDoc.exists) {
+      const apiKey = settingsDoc.data()?.apiKey;
       if (apiKey) {
-        console.log('✅ OpenAI API key retrieved from Firebase');
+        console.log('✅ OpenAI API key retrieved from Firestore settings/openai');
+        return apiKey;
+      }
+    }
+
+    const adminOpenai = await firestore.collection('admin').doc('openai').get();
+    if (adminOpenai.exists) {
+      const apiKey = adminOpenai.data()?.apiKey;
+      if (apiKey) {
+        console.log('✅ OpenAI API key retrieved from Firestore admin/openai');
         return apiKey;
       }
     }
@@ -176,15 +182,20 @@ async function getGeminiApiKey() {
       return process.env.GEMINI_API_KEY;
     }
 
-    // Get Gemini configuration from Firebase
-    const doc = await firestore.collection('settings').doc('gemini').get();
-    
-    if (doc.exists) {
-      const data = doc.data();
-      const apiKey = data.apiKey;
-      
+    const settingsDoc = await firestore.collection('settings').doc('gemini').get();
+    if (settingsDoc.exists) {
+      const apiKey = settingsDoc.data()?.apiKey;
       if (apiKey) {
-        console.log('✅ Gemini API key retrieved from Firebase');
+        console.log('✅ Gemini API key retrieved from Firestore settings/gemini');
+        return apiKey;
+      }
+    }
+
+    const adminGemini = await firestore.collection('admin').doc('gemini').get();
+    if (adminGemini.exists) {
+      const apiKey = adminGemini.data()?.apiKey;
+      if (apiKey) {
+        console.log('✅ Gemini API key retrieved from Firestore admin/gemini');
         return apiKey;
       }
     }

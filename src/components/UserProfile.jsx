@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, User, Save, Upload, Eye, EyeOff, Key } from 'lucide-react';
+import { X, User, Save, Upload, Eye, EyeOff, Key, TestTube } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { getUserProfile, updateUserProfile } from '../firebase/firestore';
 import { uploadProfilePhoto } from '../firebase/storage';
 import { deleteField } from 'firebase/firestore';
+import { testProviderApiKey } from '../api';
 
 const KEY_PLACEHOLDER = '••••••••••••••••••••';
 
@@ -42,6 +43,7 @@ const UserProfile = ({ user, onClose }) => {
     });
     const [showProviderKey, setShowProviderKey] = useState({});
     const initialProviderApiKeysRef = useRef(null);
+    const [testingProvider, setTestingProvider] = useState(null);
 
     useEffect(() => {
         if (user) {
@@ -212,6 +214,56 @@ const UserProfile = ({ user, onClose }) => {
         setShowProviderKey((prev) => ({ ...prev, [id]: !prev[id] }));
     };
 
+    const runKeyTest = async (which) => {
+        setError(null);
+        setSuccess(null);
+        setTestingProvider(which);
+        try {
+            let r;
+            if (which === 'openai') {
+                const v = openaiApiKey.trim();
+                if (!v || isMasked(v)) {
+                    setError('Paste your OpenAI key to test (replace the masked placeholder).');
+                    return;
+                }
+                r = await testProviderApiKey('openai', v);
+            } else if (which === 'lmstudio') {
+                const base = providerForm.lmStudio.baseUrl?.trim();
+                if (!base) {
+                    setError('Enter LM Studio base URL.');
+                    return;
+                }
+                let k = (providerForm.lmStudio.apiKey || '').trim();
+                if (isMasked(k)) k = '';
+                r = await testProviderApiKey('lmstudio', k, { baseUrl: base });
+            } else if (which === 'ollama') {
+                const base = providerForm.ollama.baseUrl?.trim();
+                if (!base) {
+                    setError('Enter Ollama base URL.');
+                    return;
+                }
+                r = await testProviderApiKey('ollama', '', { baseUrl: base });
+            } else {
+                const v = (providerForm[which] || '').trim();
+                if (!v || isMasked(v)) {
+                    setError('Paste a key to test (replace the masked placeholder).');
+                    return;
+                }
+                r = await testProviderApiKey(which, v);
+            }
+            if (r.success) {
+                setSuccess(r.message || 'Key is valid.');
+                setTimeout(() => setSuccess(null), 5000);
+            } else {
+                setError(r.error || 'Test failed.');
+            }
+        } catch (err) {
+            setError(err.message || 'Test failed.');
+        } finally {
+            setTestingProvider(null);
+        }
+    };
+
     const providerRows = [
         { id: 'openrouter', label: 'OpenRouter', hint: 'OpenAI-compatible gateway; model ids often look like openrouter/...' },
         { id: 'grok', label: 'xAI (Grok)', hint: 'API key from x.ai / console.x.ai' },
@@ -372,10 +424,21 @@ const UserProfile = ({ user, onClose }) => {
                         </p>
 
                         <div className="mb-6">
-                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1 flex items-center gap-2">
-                                <Key className="w-4 h-4" />
-                                OpenAI (optional)
-                            </label>
+                            <div className="flex items-center justify-between gap-2 mb-1">
+                                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
+                                    <Key className="w-4 h-4" />
+                                    OpenAI (optional)
+                                </label>
+                                <button
+                                    type="button"
+                                    onClick={() => runKeyTest('openai')}
+                                    disabled={!!testingProvider}
+                                    className="text-xs px-2 py-1 rounded-md border border-blue-300 dark:border-blue-600 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50 inline-flex items-center gap-1"
+                                >
+                                    <TestTube className="w-3.5 h-3.5" />
+                                    {testingProvider === 'openai' ? '…' : 'Test'}
+                                </button>
+                            </div>
                             <div className="relative">
                                 <input
                                     type={showOpenAiKey ? 'text' : 'password'}
@@ -400,9 +463,20 @@ const UserProfile = ({ user, onClose }) => {
                         <div className="space-y-4">
                             {providerRows.map((row) => (
                                 <div key={row.id}>
-                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                                        {row.label}
-                                    </label>
+                                    <div className="flex items-center justify-between gap-2 mb-1">
+                                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                                            {row.label}
+                                        </label>
+                                        <button
+                                            type="button"
+                                            onClick={() => runKeyTest(row.id)}
+                                            disabled={!!testingProvider}
+                                            className="text-xs px-2 py-1 rounded-md border border-blue-300 dark:border-blue-600 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50 inline-flex items-center gap-1"
+                                        >
+                                            <TestTube className="w-3.5 h-3.5" />
+                                            {testingProvider === row.id ? '…' : 'Test'}
+                                        </button>
+                                    </div>
                                     <div className="relative">
                                         <input
                                             type={showProviderKey[row.id] ? 'text' : 'password'}
@@ -427,7 +501,18 @@ const UserProfile = ({ user, onClose }) => {
                             ))}
 
                             <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-3">
-                                <p className="text-sm font-medium text-gray-800 dark:text-gray-200">LM Studio (local)</p>
+                                <div className="flex items-center justify-between gap-2">
+                                    <p className="text-sm font-medium text-gray-800 dark:text-gray-200">LM Studio (local)</p>
+                                    <button
+                                        type="button"
+                                        onClick={() => runKeyTest('lmstudio')}
+                                        disabled={!!testingProvider}
+                                        className="text-xs px-2 py-1 rounded-md border border-blue-300 dark:border-blue-600 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50 inline-flex items-center gap-1"
+                                    >
+                                        <TestTube className="w-3.5 h-3.5" />
+                                        {testingProvider === 'lmstudio' ? '…' : 'Test'}
+                                    </button>
+                                </div>
                                 <div>
                                     <label className="block text-xs text-gray-500 mb-1">Base URL</label>
                                     <input
@@ -472,7 +557,18 @@ const UserProfile = ({ user, onClose }) => {
                             </div>
 
                             <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-3">
-                                <p className="text-sm font-medium text-gray-800 dark:text-gray-200">Ollama (local)</p>
+                                <div className="flex items-center justify-between gap-2">
+                                    <p className="text-sm font-medium text-gray-800 dark:text-gray-200">Ollama (local)</p>
+                                    <button
+                                        type="button"
+                                        onClick={() => runKeyTest('ollama')}
+                                        disabled={!!testingProvider}
+                                        className="text-xs px-2 py-1 rounded-md border border-blue-300 dark:border-blue-600 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50 inline-flex items-center gap-1"
+                                    >
+                                        <TestTube className="w-3.5 h-3.5" />
+                                        {testingProvider === 'ollama' ? '…' : 'Test'}
+                                    </button>
+                                </div>
                                 <div>
                                     <label className="block text-xs text-gray-500 mb-1">Base URL</label>
                                     <input

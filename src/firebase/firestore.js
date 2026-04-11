@@ -674,6 +674,21 @@ export async function setAdminConfig(configKey, configData) {
   }
 }
 
+export async function clearAdminConfigField(configKey, fieldName) {
+  try {
+    await updateDoc(doc(db, 'admin', configKey), {
+      [fieldName]: deleteField(),
+      updatedAt: serverTimestamp()
+    });
+    return { success: true };
+  } catch (error) {
+    if (error.code === 'not-found') {
+      return { success: true };
+    }
+    return { success: false, error: error.message };
+  }
+}
+
 /**
  * System settings documents (e.g. settings/openai, settings/gemini) — admin only per rules.
  */

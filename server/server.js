@@ -68,6 +68,23 @@ async function getUserApiKeyAndSubscription(userId) {
   }
 }
 
+/**
+ * Pooled OpenAI key: uses getOpenAIApiKey() (Firestore settings/openai, then .env).
+ * When a user is authenticated, their profile openaiApiKey must override this — always apply after calling this.
+ */
+async function getPooledOpenAIApiKey() {
+  try {
+    const k = await getOpenAIApiKey();
+    if (k && String(k).trim()) {
+      return String(k).trim();
+    }
+  } catch (e) {
+    // fall through to env
+  }
+  const env = process.env.OPENAI_API_KEY;
+  return env && String(env).trim() ? String(env).trim() : null;
+}
+
 /** Keep in sync with src/utils/modelProvider.js */
 function inferProviderFromModel(model) {
   const m = String(model || '').toLowerCase();
@@ -174,6 +191,120 @@ async function ollamaNativeChat(baseUrl, model, prompt, temperature) {
   const data = await postHttpsOrHttpJson(url, body, {});
   const text = data.message?.content || data.response || 'No response generated';
   return { text };
+}
+
+/**
+ * Lightweight GET probe for API key validation (no full generation).
+ */
+function httpOrHttpsGet(urlStr, headers = {}) {
+  return new Promise((resolve, reject) => {
+    let u;
+    try {
+      u = new URL(urlStr);
+    } catch (e) {
+      reject(new Error('Invalid URL'));
+      return;
+    }
+    const lib = u.protocol === 'https:' ? https : http;
+    const port = u.port ? Number(u.port) : (u.protocol === 'https:' ? 443 : 80);
+    const req = lib.request(
+      {
+        hostname: u.hostname,
+        port,
+        path: u.pathname + u.search,
+        method: 'GET',
+        headers: { ...headers },
+        timeout: 15000
+      },
+      (res) => {
+        let buf = '';
+        res.on('data', (c) => {
+          buf += c;
+          if (buf.length > 8192) buf = buf.slice(0, 8192);
+        });
+        res.on('end', () => resolve({ status: res.statusCode, body: buf }));
+      }
+    );
+    req.on('error', reject);
+    req.setTimeout(15000, () => {
+      req.destroy();
+      reject(new Error('Request timed out'));
+    });
+    req.end();
+  });
+}
+
+async function probeProviderApiKey(provider, apiKey, baseUrl) {
+  const k = typeof apiKey === 'string' ? apiKey.trim() : '';
+  const b = typeof baseUrl === 'string' ? baseUrl.trim() : '';
+  switch (provider) {
+    case 'openai': {
+      if (!k) throw new Error('API key is required');
+      const { status, body } = await httpOrHttpsGet('https://api.openai.com/v1/models', {
+        Authorization: `Bearer ${k}`
+      });
+      if (status === 200) return { ok: true, message: 'OpenAI key is valid (listed models).' };
+      if (status === 401) throw new Error('Invalid OpenAI API key (401).');
+      throw new Error(`OpenAI check failed (${status}): ${body.substring(0, 200)}`);
+    }
+    case 'gemini': {
+      if (!k) throw new Error('API key is required');
+      const u = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(k)}`;
+      const { status, body } = await httpOrHttpsGet(u);
+      if (status === 200) return { ok: true, message: 'Gemini key is valid.' };
+      if (status === 400 || status === 403) throw new Error('Invalid or restricted Gemini API key.');
+      throw new Error(`Gemini check failed (${status}): ${body.substring(0, 200)}`);
+    }
+    case 'openrouter': {
+      if (!k) throw new Error('API key is required');
+      const { status, body } = await httpOrHttpsGet('https://openrouter.ai/api/v1/models', {
+        Authorization: `Bearer ${k}`,
+        'HTTP-Referer': process.env.OPENROUTER_REFERER || 'https://localhost',
+        'X-Title': 'Cellulai'
+      });
+      if (status === 200) return { ok: true, message: 'OpenRouter key is valid.' };
+      if (status === 401 || status === 403) throw new Error('Invalid OpenRouter API key.');
+      throw new Error(`OpenRouter check failed (${status}): ${body.substring(0, 200)}`);
+    }
+    case 'grok': {
+      if (!k) throw new Error('API key is required');
+      const { status, body } = await httpOrHttpsGet('https://api.x.ai/v1/models', {
+        Authorization: `Bearer ${k}`
+      });
+      if (status === 200) return { ok: true, message: 'xAI (Grok) key is valid.' };
+      if (status === 401 || status === 403) throw new Error('Invalid xAI API key.');
+      throw new Error(`xAI check failed (${status}): ${body.substring(0, 200)}`);
+    }
+    case 'fal': {
+      if (!k) throw new Error('API key is required');
+      const { status, body } = await httpOrHttpsGet('https://rest.fal.ai/v1/models', {
+        Authorization: `Key ${k}`
+      });
+      if (status === 200) return { ok: true, message: 'Fal key is valid.' };
+      if (status === 401 || status === 403) throw new Error('Invalid Fal API key.');
+      throw new Error(
+        `Fal check returned ${status}. If the service changed, save the key and verify with a real job. ${body.substring(0, 120)}`
+      );
+    }
+    case 'lmstudio': {
+      const root = (b || 'http://127.0.0.1:1234').replace(/\/$/, '');
+      const path = /\/v1$/i.test(root) ? '/models' : '/v1/models';
+      const url = `${root}${path}`;
+      const headers = {};
+      if (k) headers.Authorization = `Bearer ${k}`;
+      const { status, body } = await httpOrHttpsGet(url, headers);
+      if (status === 200) return { ok: true, message: 'LM Studio server responded (OpenAI-compatible).' };
+      throw new Error(`LM Studio check failed (${status}): ${body.substring(0, 200)}`);
+    }
+    case 'ollama': {
+      const root = (b || 'http://127.0.0.1:11434').replace(/\/$/, '');
+      const { status, body } = await httpOrHttpsGet(`${root}/api/tags`);
+      if (status === 200) return { ok: true, message: 'Ollama server is reachable.' };
+      throw new Error(`Ollama check failed (${status}): ${body.substring(0, 200)}`);
+    }
+    default:
+      throw new Error(`Unknown provider: ${provider}`);
+  }
 }
 
 // Local development configuration
@@ -1047,7 +1178,7 @@ async function callHybridAI(model, prompt, temperature = 0.7, maxTokens = undefi
     // Initialize skipCreditDeduction to false by default
     const skipCreditDeduction = false;
     
-    let openaiApiKey = process.env.OPENAI_API_KEY;
+    let openaiApiKey = await getPooledOpenAIApiKey();
     let geminiApiKey = process.env.GEMINI_API_KEY;
     try {
       const gk = await getGeminiApiKey();
@@ -1070,7 +1201,7 @@ async function callHybridAI(model, prompt, temperature = 0.7, maxTokens = undefi
 
         if (userApiKeyData.hasUserApiKey && userApiKeyData.apiKey) {
           openaiApiKey = userApiKeyData.apiKey;
-          console.log(`✅ Using user's OpenAI API key for generation`);
+          console.log(`✅ Using user's OpenAI API key for generation (overrides pooled/env key)`);
         } else if (providerForPolicy === 'openai' && !isPro) {
           throw new Error('Pro subscription required to use shared API key. Please upgrade to Pro or add your own OpenAI API key in your profile settings.');
         } else if (providerForPolicy === 'openai' && isPro) {
@@ -1700,6 +1831,49 @@ window.storage = storage;`;
       return;
     }
 
+    if (req.method === 'POST' && pathname === '/api/test-api-key') {
+      if (!verifiedUserId) {
+        res.statusCode = 401;
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.end(JSON.stringify({ error: 'Sign in to test API keys.' }));
+        return;
+      }
+      let body = '';
+      req.on('data', (chunk) => {
+        body += chunk;
+        if (body.length > 16384) req.connection.destroy();
+      });
+      req.on('end', async () => {
+        try {
+          let data;
+          try {
+            data = JSON.parse(body || '{}');
+          } catch {
+            res.statusCode = 400;
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.end(JSON.stringify({ error: 'Invalid JSON' }));
+            return;
+          }
+          const provider = String(data.provider || '').toLowerCase().trim();
+          const apiKey = data.apiKey;
+          const baseUrl = data.baseUrl;
+          const result = await probeProviderApiKey(provider, apiKey, baseUrl);
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.end(JSON.stringify({ success: true, message: result.message }));
+        } catch (err) {
+          res.statusCode = 400;
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.end(JSON.stringify({ success: false, error: err.message || String(err) }));
+        }
+      });
+      return;
+    }
+
     // Diagnostic endpoint for Firebase models
     if (req.url === '/api/models/diagnose') {
       try {
@@ -2268,7 +2442,7 @@ window.storage = storage;`;
           }
         }
         
-        let openaiApiKey = process.env.OPENAI_API_KEY;
+        let openaiApiKey = await getPooledOpenAIApiKey();
         
         // Try to get user's API key if userId is provided
         if (userId) {
@@ -2277,7 +2451,7 @@ window.storage = storage;`;
             if (userApiKeyData.hasUserApiKey && userApiKeyData.apiKey) {
               // User has their own API key - use it regardless of subscription
               openaiApiKey = userApiKeyData.apiKey;
-              console.log(`✅ Using user's API key for job status check`);
+              console.log(`✅ Using user's API key for job status check (overrides pooled/env key)`);
             } else if (!userApiKeyData.isPro) {
               // User doesn't have their own API key and is not Pro - cannot use environment key
               throw new Error('Pro subscription required to use shared API key. Please upgrade to Pro or add your own OpenAI API key in your profile settings.');
@@ -2787,7 +2961,18 @@ window.storage = storage;`;
 
           // Add authentication for OpenAI content endpoints
           if (isOpenAIContentEndpoint) {
-            const openaiApiKey = process.env.OPENAI_API_KEY;
+            let openaiApiKey = await getPooledOpenAIApiKey();
+            if (verifiedUserId) {
+              try {
+                const ctx = await getUserApiKeyAndSubscription(verifiedUserId);
+                if (ctx.hasUserApiKey && ctx.apiKey) {
+                  openaiApiKey = ctx.apiKey;
+                  console.log(`🔑 Using user OpenAI key for proxy-image (overrides pooled/env)`);
+                }
+              } catch (e) {
+                console.warn('⚠️ Could not load user API key for proxy-image:', e.message);
+              }
+            }
             if (openaiApiKey) {
               requestOptions.headers['Authorization'] = `Bearer ${openaiApiKey}`;
               requestOptions.headers['OpenAI-Beta'] = 'sora-2';
@@ -2945,7 +3130,7 @@ window.storage = storage;`;
           }
         }
         
-        let openaiApiKey = process.env.OPENAI_API_KEY;
+        let openaiApiKey = await getPooledOpenAIApiKey();
         
         // Try to get user's API key if userId is provided
         if (userId) {
@@ -2954,7 +3139,7 @@ window.storage = storage;`;
             if (userApiKeyData.hasUserApiKey && userApiKeyData.apiKey) {
               // User has their own API key - use it regardless of subscription
               openaiApiKey = userApiKeyData.apiKey;
-              console.log(`✅ Using user's API key for video proxy`);
+              console.log(`✅ Using user's API key for video proxy (overrides pooled/env key)`);
             } else if (!userApiKeyData.isPro) {
               // User doesn't have their own API key and is not Pro - cannot use environment key
               throw new Error('Pro subscription required to use shared API key. Please upgrade to Pro or add your own OpenAI API key in your profile settings.');
@@ -3135,8 +3320,8 @@ window.storage = storage;`;
             }
           }
 
-          // Get OpenAI API key
-          let openaiApiKey = process.env.OPENAI_API_KEY;
+          // Get OpenAI API key (user profile key overrides pooled Firestore/.env)
+          let openaiApiKey = await getPooledOpenAIApiKey();
           if (userId) {
             try {
               const userApiKeyData = await getUserApiKeyAndSubscription(userId);

@@ -3,7 +3,7 @@ import {
   Shield, Users, FolderOpen, Brain, Crown, CreditCard, 
   BarChart3, Settings, LogOut, Plus, Edit, Trash2, 
   RefreshCw, Search, X, Check, AlertCircle, Coins, Sparkles,
-  ChevronLeft, ChevronRight, Key, Server
+  ChevronLeft, ChevronRight, Key, Server, TestTube
 } from 'lucide-react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, 
@@ -18,9 +18,12 @@ import {
   getAllPackages, createPackage, updatePackage, deletePackage,
   getAllGenerations,
   getAllTemplates, createTemplate, updateTemplate, deleteTemplate,
-  getSettingsDoc, setSettingsDoc, clearSettingsField
+  getSettingsDoc,
+  clearSettingsField,
+  getAdminConfig, setAdminConfig, clearAdminConfigField
 } from '../firebase/firestore';
 import { getSubscriptionPlans, getPlanById } from '../services/subscriptions';
+import { testProviderApiKey } from '../api';
 
 const AdminDashboard = ({ user, onBack }) => {
   const [isAdmin, setIsAdmin] = useState(false);
@@ -88,6 +91,7 @@ const AdminDashboard = ({ user, onBack }) => {
     geminiUpdatedAt: null,
     loading: false
   });
+  const [testingProviderKey, setTestingProviderKey] = useState({ openai: false, gemini: false });
   const [notifications, setNotifications] = useState([]);
   const [pagination, setPagination] = useState({
     users: { page: 1, perPage: 10 },
@@ -657,20 +661,30 @@ const AdminDashboard = ({ user, onBack }) => {
     }
   };
 
+  const mergeKeyDoc = (adminRes, legacySettingsRes) => {
+    const a = adminRes.success && adminRes.data?.apiKey ? adminRes.data : null;
+    const s = legacySettingsRes.success && legacySettingsRes.data?.apiKey ? legacySettingsRes.data : null;
+    return a || s || null;
+  };
+
   const loadSystemSettings = async () => {
     setSystemSettings((prev) => ({ ...prev, loading: true }));
     try {
-      const [openaiRes, geminiRes] = await Promise.all([
+      const [adminOpenai, settingsOpenai, adminGemini, settingsGemini] = await Promise.all([
+        getAdminConfig('openai'),
         getSettingsDoc('openai'),
+        getAdminConfig('gemini'),
         getSettingsDoc('gemini')
       ]);
+      const openaiDoc = mergeKeyDoc(adminOpenai, settingsOpenai);
+      const geminiDoc = mergeKeyDoc(adminGemini, settingsGemini);
       setSystemSettings((prev) => ({
         ...prev,
         loading: false,
-        openAiConfigured: !!(openaiRes.success && openaiRes.data?.apiKey),
-        geminiConfigured: !!(geminiRes.success && geminiRes.data?.apiKey),
-        openAiUpdatedAt: openaiRes.success && openaiRes.data ? openaiRes.data.updatedAt : null,
-        geminiUpdatedAt: geminiRes.success && geminiRes.data ? geminiRes.data.updatedAt : null,
+        openAiConfigured: !!openaiDoc?.apiKey,
+        geminiConfigured: !!geminiDoc?.apiKey,
+        openAiUpdatedAt: openaiDoc?.updatedAt ?? null,
+        geminiUpdatedAt: geminiDoc?.updatedAt ?? null,
         openAiKeyInput: '',
         geminiKeyInput: ''
       }));
@@ -692,7 +706,7 @@ const AdminDashboard = ({ user, onBack }) => {
       showNotification('Paste an API key before saving.', 'error');
       return;
     }
-    const result = await setSettingsDoc('openai', { apiKey: key });
+    const result = await setAdminConfig('openai', { apiKey: key });
     if (result.success) {
       showNotification('OpenAI API key saved.', 'success');
       setSystemSettings((prev) => ({
@@ -712,7 +726,7 @@ const AdminDashboard = ({ user, onBack }) => {
       showNotification('Paste an API key before saving.', 'error');
       return;
     }
-    const result = await setSettingsDoc('gemini', { apiKey: key });
+    const result = await setAdminConfig('gemini', { apiKey: key });
     if (result.success) {
       showNotification('Gemini API key saved.', 'success');
       setSystemSettings((prev) => ({
@@ -734,8 +748,9 @@ const AdminDashboard = ({ user, onBack }) => {
     ) {
       return;
     }
-    const result = await clearSettingsField('openai', 'apiKey');
-    if (result.success) {
+    const rAdmin = await clearAdminConfigField('openai', 'apiKey');
+    await clearSettingsField('openai', 'apiKey');
+    if (rAdmin.success) {
       showNotification('OpenAI key removed from Firestore.', 'success');
       setSystemSettings((prev) => ({
         ...prev,
@@ -744,7 +759,45 @@ const AdminDashboard = ({ user, onBack }) => {
       }));
       await loadSystemSettings();
     } else {
-      showNotification(`Failed to remove key: ${result.error}`, 'error');
+      showNotification(`Failed to remove key: ${rAdmin.error}`, 'error');
+    }
+  };
+
+  const handleTestOpenAiKey = async () => {
+    const key = systemSettings.openAiKeyInput.trim();
+    if (!key) {
+      showNotification('Paste a key in the field to test it.', 'error');
+      return;
+    }
+    setTestingProviderKey((t) => ({ ...t, openai: true }));
+    try {
+      const r = await testProviderApiKey('openai', key);
+      if (r.success) {
+        showNotification(r.message || 'OpenAI key is valid.', 'success');
+      } else {
+        showNotification(r.error || 'Test failed', 'error');
+      }
+    } finally {
+      setTestingProviderKey((t) => ({ ...t, openai: false }));
+    }
+  };
+
+  const handleTestGeminiKey = async () => {
+    const key = systemSettings.geminiKeyInput.trim();
+    if (!key) {
+      showNotification('Paste a key in the field to test it.', 'error');
+      return;
+    }
+    setTestingProviderKey((t) => ({ ...t, gemini: true }));
+    try {
+      const r = await testProviderApiKey('gemini', key);
+      if (r.success) {
+        showNotification(r.message || 'Gemini key is valid.', 'success');
+      } else {
+        showNotification(r.error || 'Test failed', 'error');
+      }
+    } finally {
+      setTestingProviderKey((t) => ({ ...t, gemini: false }));
     }
   };
 
@@ -756,8 +809,9 @@ const AdminDashboard = ({ user, onBack }) => {
     ) {
       return;
     }
-    const result = await clearSettingsField('gemini', 'apiKey');
-    if (result.success) {
+    const rAdmin = await clearAdminConfigField('gemini', 'apiKey');
+    await clearSettingsField('gemini', 'apiKey');
+    if (rAdmin.success) {
       showNotification('Gemini key removed from Firestore.', 'success');
       setSystemSettings((prev) => ({
         ...prev,
@@ -766,7 +820,7 @@ const AdminDashboard = ({ user, onBack }) => {
       }));
       await loadSystemSettings();
     } else {
-      showNotification(`Failed to remove key: ${result.error}`, 'error');
+      showNotification(`Failed to remove key: ${rAdmin.error}`, 'error');
     }
   };
 
@@ -2777,15 +2831,16 @@ const AdminDashboard = ({ user, onBack }) => {
                 <div className="text-sm text-amber-900 dark:text-amber-100/90">
                   <p className="font-medium text-amber-950 dark:text-amber-50 mb-1">Server API keys</p>
                   <p className="text-amber-800 dark:text-amber-200/90">
-                    Keys stored here are read by the production backend (same documents as{' '}
+                    Saves to{' '}
                     <code className="px-1 py-0.5 rounded bg-amber-100/80 dark:bg-amber-900/50 font-mono text-xs">
-                      settings/openai
+                      admin/openai
                     </code>{' '}
                     and{' '}
                     <code className="px-1 py-0.5 rounded bg-amber-100/80 dark:bg-amber-900/50 font-mono text-xs">
-                      settings/gemini
-                    </code>
-                    ). If a key is not set in Firestore, the server falls back to environment variables when configured.
+                      admin/gemini
+                    </code>{' '}
+                    (admin-only in Firestore rules). The server also checks legacy{' '}
+                    <code className="font-mono text-xs">settings/*</code> if present, then environment variables.
                   </p>
                 </div>
               </div>
@@ -2830,6 +2885,15 @@ const AdminDashboard = ({ user, onBack }) => {
                     disabled={systemSettings.loading}
                   />
                   <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleTestOpenAiKey}
+                      disabled={systemSettings.loading || testingProviderKey.openai}
+                      className="px-4 py-2 border border-blue-300 dark:border-blue-600 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50 text-sm rounded-lg transition-colors inline-flex items-center gap-1.5"
+                    >
+                      <TestTube className="h-4 w-4" />
+                      {testingProviderKey.openai ? 'Testing…' : 'Test key'}
+                    </button>
                     <button
                       type="button"
                       onClick={handleSaveOpenAiKey}
@@ -2890,6 +2954,15 @@ const AdminDashboard = ({ user, onBack }) => {
                     disabled={systemSettings.loading}
                   />
                   <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleTestGeminiKey}
+                      disabled={systemSettings.loading || testingProviderKey.gemini}
+                      className="px-4 py-2 border border-blue-300 dark:border-blue-600 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50 text-sm rounded-lg transition-colors inline-flex items-center gap-1.5"
+                    >
+                      <TestTube className="h-4 w-4" />
+                      {testingProviderKey.gemini ? 'Testing…' : 'Test key'}
+                    </button>
                     <button
                       type="button"
                       onClick={handleSaveGeminiKey}

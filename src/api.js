@@ -209,6 +209,39 @@ export async function checkJobStatus(jobId) {
 }
 
 /**
+ * Verify an API key via the server (lightweight provider request).
+ * @param {string} provider - openai | gemini | openrouter | grok | fal | lmstudio | ollama
+ * @param {string} [apiKey]
+ * @param {{ baseUrl?: string }} [options] - required for lmstudio / ollama
+ */
+export async function testProviderApiKey(provider, apiKey, options = {}) {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/test-api-key`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(await getAuthHeaders()),
+      },
+      body: JSON.stringify({
+        provider,
+        apiKey: apiKey ?? '',
+        baseUrl: options.baseUrl,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return {
+        success: false,
+        error: data.error || data.message || `Request failed (${response.status})`,
+      };
+    }
+    return { success: true, message: data.message || 'Key is valid.' };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+/**
  * Get available AI models
  */
 export async function getAvailableModels() {
