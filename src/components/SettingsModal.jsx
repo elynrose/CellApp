@@ -471,7 +471,8 @@ const SettingsModal = ({ isOpen, onClose, cell, onSave, sheets = [], cells = {} 
                     <div className="border border-amber-900/40 bg-amber-950/20 rounded-lg p-3 space-y-2">
                         <p className="text-sm font-medium text-amber-200">Server schedule (cron)</p>
                         <p className="text-xs text-gray-400">
-                            Requires <code className="text-amber-300/90">ENABLE_SCHEDULE_WORKER=true</code> on the API server. Uses auto-run: when the schedule fires, the card runs if the app is open; keep auto-run on.
+                            Requires <code className="text-amber-300/90">ENABLE_SCHEDULE_WORKER=true</code> on the API server. Set{' '}
+                            <code className="text-amber-300/90">SCHEDULE_RUN_ON_SERVER=true</code> to run the cell (text models) without an open browser. Otherwise the worker only signals the app—keep this tab open. Cron + autoRun must be set.
                         </p>
                         <div>
                             <label className="block text-xs text-gray-400 mb-1">Cron (5 fields: min hour dom month dow)</label>

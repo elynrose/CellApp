@@ -8,6 +8,7 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const admin = require('firebase-admin');
 const cronParser = require('cron-parser');
+const { runScheduledCellExecution } = require('./scheduled-cell-run');
 
 let db = null;
 
@@ -80,27 +81,41 @@ async function processDueJobs(firestore) {
     );
 
     try {
-      await firestore.runTransaction(async (tx) => {
-        const cellDoc = await tx.get(cellRef);
-        if (!cellDoc.exists) {
-          throw new Error('Cell not found');
-        }
-        const c = cellDoc.data();
-        if (!c.autoRun) {
-          throw new Error('autoRun disabled');
-        }
-        const trig = (c.scheduledRunTrigger || 0) + 1;
-        tx.update(cellRef, {
-          scheduledRunTrigger: trig,
-          scheduledRunAt: admin.firestore.FieldValue.serverTimestamp()
-        });
+      const runOnServer = process.env.SCHEDULE_RUN_ON_SERVER === 'true';
+
+      if (runOnServer) {
+        await runScheduledCellExecution(firestore, { userId, projectId, sheetId, cellId });
         const nextIso = nextFireIso(cronExpression, timeZone);
-        tx.update(docSnap.ref, {
+        await docSnap.ref.update({
           nextRunAt: admin.firestore.Timestamp.fromDate(new Date(nextIso)),
           lastRunAt: admin.firestore.FieldValue.serverTimestamp(),
+          lastServerRunOk: true,
+          lastError: null,
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
         });
-      });
+      } else {
+        await firestore.runTransaction(async (tx) => {
+          const cellDoc = await tx.get(cellRef);
+          if (!cellDoc.exists) {
+            throw new Error('Cell not found');
+          }
+          const c = cellDoc.data();
+          if (!c.autoRun) {
+            throw new Error('autoRun disabled');
+          }
+          const trig = (c.scheduledRunTrigger || 0) + 1;
+          tx.update(cellRef, {
+            scheduledRunTrigger: trig,
+            scheduledRunAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+          const nextIso = nextFireIso(cronExpression, timeZone);
+          tx.update(docSnap.ref, {
+            nextRunAt: admin.firestore.Timestamp.fromDate(new Date(nextIso)),
+            lastRunAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+        });
+      }
       n += 1;
     } catch (e) {
       console.error('schedule job failed', docSnap.id, e.message);
