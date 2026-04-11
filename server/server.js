@@ -32,6 +32,7 @@ if (process.env.STRIPE_SECRET_KEY) {
 // Firebase server integration for cloud deployment
 const { initializeFirebase, getOpenAIApiKey, getGeminiApiKey, getActiveModelsFromFirebase, diagnoseFirebaseModels } = require('./firebase-server-config');
 const { executeTool } = require('./tools-executor');
+const { getIntegrationSecretsForUser } = require('./integration-secrets');
 const admin = require('firebase-admin');
 
 /**
@@ -1318,25 +1319,6 @@ function getContentType(filePath) {
 }
 
 /**
- * Load integration API keys from Firestore (never sent to client).
- */
-async function getIntegrationSecretsForUser(userId) {
-  try {
-    const firestoreInstance = await initializeFirebase();
-    if (!firestoreInstance || !userId) return {};
-    const userDoc = await firestoreInstance.collection('users').doc(userId).get();
-    if (!userDoc.exists) return {};
-    const data = userDoc.data() || {};
-    return data.integrationSecrets && typeof data.integrationSecrets === 'object'
-      ? data.integrationSecrets
-      : {};
-  } catch (e) {
-    console.error('getIntegrationSecretsForUser:', e.message);
-    return {};
-  }
-}
-
-/**
  * Handle incoming HTTP requests.
  * For GET requests, serves files from the public directory.
  * For API requests, handles OpenAI and Gemini integration.
@@ -1604,7 +1586,8 @@ window.storage = storage;`;
             handleError(res, 400, 'Too many tool calls');
             return;
           }
-          const secrets = await getIntegrationSecretsForUser(verifiedUserId);
+          const firestoreInstance = await initializeFirebase();
+          const secrets = await getIntegrationSecretsForUser(firestoreInstance, verifiedUserId);
           const results = [];
           for (const tc of toolCalls) {
             const tool = tc.tool || tc.name;

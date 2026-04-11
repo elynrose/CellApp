@@ -7,8 +7,11 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const admin = require('firebase-admin');
 const { initializeFirebase, getGeminiApiKey } = require('./firebase-server-config');
+const { executeTool } = require('./tools-executor');
+const { getIntegrationSecretsForUser } = require('./integration-secrets');
 
 let resolveDependenciesFn = null;
+let cellToolsMod = null;
 
 async function loadResolveDependencies() {
   if (resolveDependenciesFn) return resolveDependenciesFn;
@@ -17,6 +20,15 @@ async function loadResolveDependencies() {
   resolveDependenciesFn = mod.resolveDependencies;
   return resolveDependenciesFn;
 }
+
+async function loadCellTools() {
+  if (cellToolsMod) return cellToolsMod;
+  const url = pathToFileURL(path.join(__dirname, '../src/utils/cellTools.js')).href;
+  cellToolsMod = await import(url);
+  return cellToolsMod;
+}
+
+const MAX_TOOL_ROUNDS = 4;
 
 function getModelType(modelId) {
   if (!modelId) return 'text';
@@ -145,6 +157,77 @@ async function callOpenAiText(apiKey, model, prompt, temperature, maxTokens) {
 }
 
 /**
+ * Text generation with optional tool rounds (parity with client cellExecution when enableTools is on).
+ */
+async function runTextWithOptionalTools({
+  firestore,
+  userId,
+  cell,
+  basePrompt,
+  model,
+  temperature,
+  maxTokens,
+  creditCost,
+  getGeminiKey,
+  getOpenAiKey
+}) {
+  const { CELL_TOOLS_INSTRUCTION, parseToolCallsFromText, isToolAllowedForCell, cellWantsTools } =
+    await loadCellTools();
+
+  if (!cellWantsTools(cell)) {
+    const idLower = String(model).toLowerCase();
+    const isGeminiText = idLower.includes('gemini') && !idLower.includes('imagen');
+    let text;
+    if (isGeminiText) {
+      const { key: gKey } = await getGeminiKey();
+      if (!gKey) throw new Error('No Gemini API key configured for scheduled runs');
+      text = await callGeminiText(gKey, model, basePrompt, temperature, maxTokens);
+    } else {
+      const { key: apiKey } = await getOpenAiKey();
+      if (!apiKey) throw new Error('No OpenAI API key available');
+      text = await callOpenAiText(apiKey, model, basePrompt, temperature, maxTokens);
+    }
+    await deductCreditsTx(firestore, userId, creditCost);
+    return text;
+  }
+
+  const secrets = await getIntegrationSecretsForUser(firestore, userId);
+  let conversation = basePrompt + CELL_TOOLS_INSTRUCTION;
+  let lastText = '';
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    await deductCreditsTx(firestore, userId, creditCost);
+
+    const idLower = String(model).toLowerCase();
+    const isGeminiText = idLower.includes('gemini') && !idLower.includes('imagen');
+    if (isGeminiText) {
+      const { key: gKey } = await getGeminiKey();
+      if (!gKey) throw new Error('No Gemini API key configured for scheduled runs');
+      lastText = await callGeminiText(gKey, model, conversation, temperature, maxTokens);
+    } else {
+      const { key: apiKey } = await getOpenAiKey();
+      if (!apiKey) throw new Error('No OpenAI API key available');
+      lastText = await callOpenAiText(apiKey, model, conversation, temperature, maxTokens);
+    }
+
+    const calls = parseToolCallsFromText(lastText).filter((c) => isToolAllowedForCell(cell, c.tool));
+    if (!calls.length) {
+      return lastText;
+    }
+
+    const results = [];
+    for (const tc of calls) {
+      const r = await executeTool(tc.tool, tc.args || {}, secrets);
+      results.push({ tool: tc.tool, ok: r.ok, data: r.data, error: r.error });
+    }
+    const toolPayload = JSON.stringify(results, null, 2);
+    conversation = `${conversation}\n\n[ASSISTANT]\n${lastText}\n\n[TOOL RESULTS]\n${toolPayload}\n\nWrite the final answer for the user (plain text, no tool blocks unless you must call another allowed tool).`;
+  }
+
+  return lastText;
+}
+
+/**
  * @param {FirebaseFirestore.Firestore} firestore
  */
 async function runScheduledCellExecution(firestore, { userId, projectId, sheetId, cellId }) {
@@ -263,23 +346,20 @@ async function runScheduledCellExecution(firestore, { userId, projectId, sheetId
     );
   }
 
-  const idLower = String(model).toLowerCase();
-  const isGeminiText = idLower.includes('gemini') && !idLower.includes('imagen');
-
-  let output;
   const creditCost = getCreditCost(modelType, model);
 
-  if (isGeminiText) {
-    const { key: gKey } = await getGeminiKeyForScheduledRun(firestore, userId);
-    if (!gKey) throw new Error('No Gemini API key configured for scheduled runs');
-    output = await callGeminiText(gKey, model, finalPrompt, temperature, maxTokens);
-  } else {
-    const { key: apiKey } = await getOpenAiKeyForUser(firestore, userId);
-    if (!apiKey) throw new Error('No OpenAI API key available');
-    output = await callOpenAiText(apiKey, model, finalPrompt, temperature, maxTokens);
-  }
-
-  await deductCreditsTx(firestore, userId, creditCost);
+  const output = await runTextWithOptionalTools({
+    firestore,
+    userId,
+    cell,
+    basePrompt: finalPrompt,
+    model,
+    temperature,
+    maxTokens,
+    creditCost,
+    getGeminiKey: () => getGeminiKeyForScheduledRun(firestore, userId),
+    getOpenAiKey: () => getOpenAiKeyForUser(firestore, userId)
+  });
 
   const generation = {
     prompt: userPrompt,

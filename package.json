@@ -13,7 +13,8 @@
     "start": "node server/server.js",
     "build:server": "vite build && node scripts/sync-server-public.mjs",
     "test:rules": "firebase emulators:exec --only firestore \"node ./tests/firestore.rules.test.mjs\"",
-    "test:newsletter": "node ./tests/newsletter-pipeline.test.mjs"
+    "test:newsletter": "node ./tests/newsletter-pipeline.test.mjs",
+    "test:scheduled-tools": "node ./tests/scheduled-tools-loop.selftest.mjs"
   },
   "engines": {
     "node": "20.x"
