@@ -1,4 +1,4 @@
-import React, { useRef, useState, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 import Card from './Card';
 import Connection from './Connection';
@@ -9,15 +9,9 @@ import { generateConnectionsFromDependencies, mergeConnections } from '../utils/
 const Canvas = ({ cells, connections = [], onCellUpdate, onCellPositionChange, onRunCell, onStopCell, onDeleteCell, runningCells = new Set(), userId, projectId, sheetId, availableModels = [], sheets = [], allCells = {} }) => {
     const [showSidebar, setShowSidebar] = useState(false);
 
-    // Generate connections from dependencies
-    // Create a dependency key from all cell prompts to ensure updates when prompts change
-    const cellsPromptKey = useMemo(() => {
-        return cells.map(c => `${c.cell_id}:${c.prompt || ''}`).join('|');
-    }, [cells]);
-    
     const dependencyConnections = useMemo(() => {
         return generateConnectionsFromDependencies(cells);
-    }, [cells, cellsPromptKey]);
+    }, [cells]);
 
     // Merge manual connections with dependency-based connections
     const allConnections = useMemo(() => {

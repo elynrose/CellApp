@@ -719,7 +719,7 @@ export async function runCell({
       console.log(`🎬 cellExecution: Before generateAI call - seconds type: ${typeof videoSettings.seconds}, value: "${videoSettings.seconds}"`);
     }
 
-    const result = await generateAI(finalPrompt, model, temperature, maxTokens, videoSettings, audioSettings, userId);
+    const result = await generateAI(finalPrompt, model, temperature, maxTokens, videoSettings, audioSettings);
     
     // Deduct credits after successful generation
     if (result.success) {
@@ -1280,7 +1280,7 @@ export async function pollJobStatus({
   }
 
   try {
-    const statusResult = await checkJobStatus(jobId, userId);
+    const statusResult = await checkJobStatus(jobId);
     
     if (!statusResult.success) {
       // Ensure error is a string, not an object

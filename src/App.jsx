@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { onAuthStateChange, getCurrentUser } from './firebase/auth';
-import { getProjects, createProject, getSheets, createSheet, deleteSheet, updateSheet, getSheetCells, saveCell, getActiveModels, deleteCell, getUserSubscription } from './firebase/firestore';
-import { runCell, runCells, formatOutput, pollJobStatus, cancelPolling } from './services/cellExecution';
+import { onAuthStateChange } from './firebase/auth';
+import { getProjects, createProject, getSheets, createSheet, updateSheet, getSheetCells, saveCell, getActiveModels, deleteCell, getUserSubscription } from './firebase/firestore';
+import { runOrchestratorHandoffPipeline } from './services/orchestrator';
+import { runCell, pollJobStatus, cancelPolling } from './services/cellExecution';
 import { parseDependencies, findDependentCells } from './utils/dependencies';
 import { getModelType } from './api';
 import Canvas from './components/Canvas';
-import { Plus, Box, Grid, Trash2, Play, LogOut, User, Shield, Crown, X, AlertCircle, Sparkles, Check, Edit2, GripVertical, ChevronDown, FolderOpen, Copy, FileText, Download } from 'lucide-react';
+import { Plus, Box, Grid, Trash2, Play, LogOut, User, Shield, Crown, X, AlertCircle, Sparkles, Check, Edit2, GripVertical, ChevronDown, FolderOpen, Copy, FileText, Download, Workflow } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { signInWithGoogle, signOutUser, isCurrentUserAdmin } from './firebase/auth';
 import AdminDashboard from './components/AdminDashboard';
@@ -15,11 +17,36 @@ import TemplateModal from './components/TemplateModal';
 import UserProfile from './components/UserProfile';
 import GenerationSelectModal from './components/GenerationSelectModal';
 
+const orchestratorReportStorageKey = (userId, projectId, sheetId) =>
+  `orchestratorRun_${userId}_${projectId}_${sheetId}`;
+
+function formatOrchestratorEventForPdf(ev) {
+  if (!ev || typeof ev !== 'object') return String(ev);
+  switch (ev.type) {
+    case 'plan_start':
+      return `Plan round ${ev.round}/${ev.maxPhases}`;
+    case 'done':
+      return `Planner: goal complete — ${ev.reason || ''}`.trim();
+    case 'resolve':
+      return `Resolve phase ${ev.round}: ${ev.instruction || ''}`.trim();
+    case 'phase_ready':
+      return `Template ready: ${ev.templateName || ev.templateId || '—'} (${ev.templateId || ''})`.trim();
+    case 'applying':
+      return `Applying phase ${ev.phase}/${ev.total}: ${ev.templateName || ''}`.trim();
+    default:
+      try {
+        return JSON.stringify(ev);
+      } catch {
+        return String(ev.type || '');
+      }
+  }
+}
+
 function App() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [projects, setProjects] = useState([]);
+  const [, setProjects] = useState([]);
   const [currentProjectId, setCurrentProjectId] = useState(null);
   const [sheets, setSheets] = useState([]);
   const [activeSheet, setActiveSheet] = useState(null);
@@ -27,7 +54,7 @@ function App() {
   const [connections, setConnections] = useState([]);
   const [availableModels, setAvailableModels] = useState([]);
   const [defaultModel, setDefaultModel] = useState('gpt-3.5-turbo');
-  const [defaultTemperature, setDefaultTemperature] = useState(0.7);
+  const defaultTemperature = 0.7;
   const [connectingSource, setConnectingSource] = useState(null);
   const [runningCells, setRunningCells] = useState(new Set());
   const [showAdmin, setShowAdmin] = useState(false);
@@ -39,6 +66,13 @@ function App() {
   const [notification, setNotification] = useState(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [showOrchestratorModal, setShowOrchestratorModal] = useState(false);
+  const [orchestratorPrompt, setOrchestratorPrompt] = useState('');
+  const [orchestratorRunning, setOrchestratorRunning] = useState(false);
+  const [orchestratorMaxPhases, setOrchestratorMaxPhases] = useState(5);
+  const [orchestratorHandoffLog, setOrchestratorHandoffLog] = useState([]);
+  /** Last successful orchestrator run on this sheet (for PDF + reload); persisted in sessionStorage */
+  const [orchestratorRunReport, setOrchestratorRunReport] = useState(null);
 
   // Auto-dismiss notifications after 8 seconds
   useEffect(() => {
@@ -73,7 +107,6 @@ function App() {
   const autoRunQueueRef = useRef([]);
   const isProcessingAutoRunRef = useRef(false);
   // Track polling timeouts to allow cancellation
-  const pollingTimeoutsRef = useRef({});
 
   // Initialize auth state
   useEffect(() => {
@@ -142,7 +175,6 @@ function App() {
           if (now >= nextResetDate) {
             // Credits need reset - this will be handled by cellExecution when user tries to generate
             // But we can trigger it here for immediate UI update
-            const { checkAndResetUserCredits } = await import('./utils/creditReset');
             const { getPlanById } = await import('./services/subscriptions');
             const planId = subscriptionData.subscription || 'free';
             const plan = await getPlanById(planId);
@@ -175,6 +207,27 @@ function App() {
   useEffect(() => {
     if (user && currentProjectId && activeSheet) {
       loadCells(user.uid, currentProjectId, activeSheet.id);
+    }
+  }, [user, currentProjectId, activeSheet]);
+
+  // Restore last orchestrator run report for this sheet (session-only)
+  useEffect(() => {
+    if (!user || !currentProjectId || !activeSheet) {
+      setOrchestratorRunReport(null);
+      return;
+    }
+    try {
+      const raw = sessionStorage.getItem(
+        orchestratorReportStorageKey(user.uid, currentProjectId, activeSheet.id)
+      );
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        setOrchestratorRunReport(parsed && typeof parsed === 'object' ? parsed : null);
+      } else {
+        setOrchestratorRunReport(null);
+      }
+    } catch {
+      setOrchestratorRunReport(null);
     }
   }, [user, currentProjectId, activeSheet]);
 
@@ -413,8 +466,6 @@ function App() {
                 }
               }
             });
-            // Store timeout reference for this cell's polling
-            pollingTimeoutsRef.current[cellId] = pollPromise;
           }
         });
       }
@@ -731,7 +782,7 @@ function App() {
     isProcessingAutoRunRef.current = true;
 
     while (autoRunQueueRef.current.length > 0) {
-      const { cellId, output, cell: updatedCell } = autoRunQueueRef.current.shift();
+      const { cellId } = autoRunQueueRef.current.shift();
       
       // Wait a bit for state to propagate
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -806,8 +857,6 @@ function App() {
 
   // Debounce timer for position saves during dragging
   const positionSaveTimers = useRef({});
-  // Track if we're currently dragging to avoid saves during drag
-  const isDraggingRef = useRef(false);
 
   const handleDeleteCell = async (cellId) => {
     if (!user || !currentProjectId || !activeSheet) return;
@@ -1339,33 +1388,6 @@ function App() {
     }
   };
 
-  const handleRunAllCells = async () => {
-    if (!user || !currentProjectId || !activeSheet) return;
-
-    const cellIds = Object.keys(cells).filter(id => cells[id].prompt);
-    if (cellIds.length === 0) return;
-
-    try {
-      await runCells({
-        cellIds,
-        sheet: { ...activeSheet, cells },
-        userId: user.uid,
-        projectId: currentProjectId,
-        sheetId: activeSheet.id,
-        sheets: sheets.map(s => ({
-          ...s,
-          cells: s.id === activeSheet.id ? cells : {}
-        })),
-        onProgress: ({ status, cellId, output, error }) => {
-          if (status === 'complete' && output) {
-            handleCellUpdate(cellId, undefined, output);
-          }
-        }
-      });
-    } catch (error) {
-    }
-  };
-
   // Helper function to generate next available cell reference (A1, B1, C1, etc.)
   const getNextCellReference = () => {
     // Filter to only cell references that match the pattern A1, B1, C1, etc.
@@ -1431,6 +1453,10 @@ function App() {
       characterLimit: cellData.characterLimit !== undefined ? cellData.characterLimit : 0,
       outputFormat: cellData.outputFormat || '',
       autoRun: cellData.autoRun !== undefined ? cellData.autoRun : false,
+      interval: cellData.interval !== undefined ? cellData.interval : 0,
+      enableTools: cellData.enableTools ?? false,
+      enabledTools: cellData.enabledTools && typeof cellData.enabledTools === 'object' ? cellData.enabledTools : undefined,
+      schedule: cellData.schedule || null,
       name: cellData.name || '', // Display name/title - can be changed by user
       generations: []
     };
@@ -1442,6 +1468,157 @@ function App() {
       return cellId;
     } catch (error) {
       return null;
+    }
+  };
+
+  const clearCurrentSheetCells = async () => {
+    if (!user || !currentProjectId || !activeSheet) return;
+    const ids = Object.keys(cells);
+    for (const cellId of ids) {
+      try {
+        await deleteCell(user.uid, currentProjectId, activeSheet.id, cellId);
+      } catch {
+        // continue
+      }
+    }
+    flushSync(() => {
+      setCells({});
+      setConnections([]);
+    });
+    cellsRef.current = {};
+  };
+
+  const handleRunOrchestrator = async () => {
+    const goal = orchestratorPrompt.trim();
+    if (!goal || !user || !currentProjectId || !activeSheet) {
+      setNotification({
+        type: 'error',
+        title: 'Orchestrator',
+        message: 'Describe your task and ensure a sheet is open.',
+        showUpgrade: false
+      });
+      return;
+    }
+
+    setOrchestratorRunning(true);
+    const runEvents = [];
+    try {
+      const hadCells = Object.keys(cells).length > 0;
+      if (hadCells) {
+        const ok = window.confirm(
+          'Replace all cards on this sheet with the workflow the orchestrator selects or creates?'
+        );
+        if (!ok) {
+          setOrchestratorRunning(false);
+          return;
+        }
+        await clearCurrentSheetCells();
+      }
+
+      setOrchestratorHandoffLog([]);
+      const maxPhases = Math.min(Math.max(Number(orchestratorMaxPhases) || 5, 1), 10);
+
+      const pipeline = await runOrchestratorHandoffPipeline(goal, availableModels, {
+        maxPhases,
+        onProgress: (ev) => {
+          runEvents.push(ev);
+          setOrchestratorHandoffLog((prev) => [...prev, ev]);
+        }
+      });
+
+      if (!pipeline.success) {
+        setNotification({
+          type: 'error',
+          title: 'Orchestrator failed',
+          message: pipeline.error || 'Could not build workflows.',
+          showUpgrade: false
+        });
+        return;
+      }
+
+      const phases = pipeline.phases || [];
+      if (phases.length === 0) {
+        setNotification({
+          type: 'info',
+          title: 'Orchestrator',
+          message: pipeline.summary || 'No template phases were needed.',
+          showUpgrade: false
+        });
+        setShowOrchestratorModal(false);
+        setOrchestratorPrompt('');
+        return;
+      }
+
+      for (let i = 0; i < phases.length; i++) {
+        const p = phases[i];
+        setOrchestratorHandoffLog((prev) => [
+          ...prev,
+          { type: 'applying', phase: i + 1, total: phases.length, templateName: p.template.name }
+        ]);
+        if (i > 0) {
+          await clearCurrentSheetCells();
+        }
+        await applyTemplate(p.template, { skipEmptySheetCheck: true });
+      }
+
+      const last = phases[phases.length - 1];
+      const parts = phases.map(
+        (p, idx) =>
+          `Phase ${idx + 1}: ${p.template.name}${p.source === 'generated' ? ' (saved)' : ''}`
+      );
+      let msg = parts.join(' → ');
+      if (pipeline.finished && pipeline.stopReason === 'goal_met') {
+        msg += `. ${pipeline.summary || 'Goal addressed.'}`;
+      } else if (pipeline.stopReason === 'max_phases') {
+        msg += `. ${pipeline.summary || ''}`;
+      }
+      setNotification({
+        type: 'success',
+        title: 'Orchestrator',
+        message: msg,
+        showUpgrade: false
+      });
+      setShowOrchestratorModal(false);
+      setOrchestratorPrompt('');
+
+      const phaseSummaries = phases.map((p, idx) => ({
+        phase: idx + 1,
+        instruction: p.instruction,
+        templateId: p.template?.id,
+        templateName: p.template?.name,
+        source: p.source,
+        matchReason: p.matchReason,
+        plannerReason: p.plannerReason
+      }));
+      const report = {
+        goal,
+        completedAt: new Date().toISOString(),
+        finished: pipeline.finished === true,
+        stopReason: pipeline.stopReason,
+        summary: pipeline.summary,
+        maxPhases,
+        phases: phaseSummaries,
+        progressEvents: [...runEvents]
+      };
+      try {
+        sessionStorage.setItem(
+          orchestratorReportStorageKey(user.uid, currentProjectId, activeSheet.id),
+          JSON.stringify(report)
+        );
+      } catch {
+        // ignore quota / private mode
+      }
+      setOrchestratorRunReport(report);
+      setOrchestratorHandoffLog([]);
+    } catch (e) {
+      setNotification({
+        type: 'error',
+        title: 'Orchestrator error',
+        message: e.message || 'Something went wrong.',
+        showUpgrade: false
+      });
+    } finally {
+      setOrchestratorRunning(false);
     }
   };
 
@@ -1470,12 +1647,13 @@ function App() {
     return activeModelsOfType[0].id || activeModelsOfType[0].originalId;
   };
 
-  const applyTemplate = async (template) => {
+  const applyTemplate = async (template, options = {}) => {
+    const { skipEmptySheetCheck = false } = options;
     if (!activeSheet || !user || !currentProjectId) return;
 
     // Check if the sheet already has cards
     const existingCellsCount = Object.keys(cells).length;
-    if (existingCellsCount > 0) {
+    if (!skipEmptySheetCheck && existingCellsCount > 0) {
       setNotification({
         type: 'error',
         title: 'Cannot Apply Template',
@@ -1540,6 +1718,10 @@ function App() {
           characterLimit: cellTemplate.characterLimit !== undefined ? cellTemplate.characterLimit : 0,
           outputFormat: cellTemplate.outputFormat || '',
           autoRun: cellTemplate.autoRun !== undefined ? cellTemplate.autoRun : false,
+          interval: cellTemplate.interval !== undefined ? cellTemplate.interval : 0,
+          enableTools: cellTemplate.enableTools ?? false,
+          enabledTools: cellTemplate.enabledTools || undefined,
+          schedule: cellTemplate.schedule || null,
           name: cellTemplate.name || ''
         }, cellId);
       }
@@ -1796,6 +1978,81 @@ function App() {
           });
         }
       });
+
+      // Orchestrator activity (planning log + phase templates) when this sheet was built via Orchestrator
+      const orchReport = orchestratorRunReport;
+      if (
+        orchReport &&
+        activeSheet &&
+        orchReport.phases &&
+        Array.isArray(orchReport.phases) &&
+        orchReport.phases.length > 0
+      ) {
+        checkPageBreak(40);
+        yPos += 8;
+        doc.setDrawColor(180, 180, 180);
+        doc.line(margin, yPos, pageWidth - margin, yPos);
+        yPos += 12;
+
+        addText('ORCHESTRATOR ACTIVITY', 16, true, [0, 80, 120]);
+        const goalLine =
+          typeof orchReport.goal === 'string' && orchReport.goal.trim()
+            ? orchReport.goal.trim()
+            : '(no goal text stored)';
+        addText(`Main goal: ${goalLine}`, 10, false, [0, 0, 0]);
+        if (orchReport.completedAt) {
+          try {
+            addText(
+              `Orchestrator completed: ${new Date(orchReport.completedAt).toLocaleString()}`,
+              9,
+              false,
+              [100, 100, 100]
+            );
+          } catch {
+            addText(`Orchestrator completed: ${orchReport.completedAt}`, 9, false, [100, 100, 100]);
+          }
+        }
+        const statusBits = [
+          orchReport.finished ? 'finished' : 'not finished',
+          orchReport.stopReason ? `stop: ${orchReport.stopReason}` : ''
+        ]
+          .filter(Boolean)
+          .join(' · ');
+        if (statusBits) addText(statusBits, 9, false, [100, 100, 100]);
+        if (orchReport.summary) {
+          addText(`Summary: ${orchReport.summary}`, 10, false, [0, 0, 0]);
+        }
+        yPos += 5;
+
+        addText('Phases (templates applied)', 12, true, [50, 50, 150]);
+        orchReport.phases.forEach((ph, i) => {
+          checkPageBreak(28);
+          const title = ph.templateName || ph.templateId || `Phase ${i + 1}`;
+          addText(
+            `Phase ${ph.phase != null ? ph.phase : i + 1}: ${title}`,
+            11,
+            true,
+            [0, 0, 0]
+          );
+          if (ph.instruction) addText(`Instruction: ${ph.instruction}`, 9, false, [0, 0, 0]);
+          if (ph.templateId) addText(`Template ID: ${ph.templateId}`, 8, false, [120, 120, 120]);
+          if (ph.source) addText(`Source: ${ph.source}`, 8, false, [120, 120, 120]);
+          if (ph.matchReason) addText(`Template match: ${ph.matchReason}`, 8, false, [120, 120, 120]);
+          if (ph.plannerReason) addText(`Planner note: ${ph.plannerReason}`, 8, false, [120, 120, 120]);
+          yPos += 4;
+        });
+
+        const evs = orchReport.progressEvents;
+        if (Array.isArray(evs) && evs.length > 0) {
+          checkPageBreak(24);
+          addText('Planning & execution log', 12, true, [50, 50, 150]);
+          evs.forEach((ev) => {
+            const line = formatOrchestratorEventForPdf(ev);
+            if (line) addText(`• ${line}`, 9, false, [60, 60, 60]);
+          });
+        }
+        yPos += 5;
+      }
 
       // Footer
       const totalPages = doc.internal.pages.length - 1;
@@ -2090,6 +2347,14 @@ function App() {
             Download Sheet
           </button>
           <button
+            onClick={() => setShowOrchestratorModal(true)}
+            className="px-5 py-2 bg-amber-700/90 hover:bg-amber-600 text-white rounded-lg text-sm font-semibold transition-all shadow-lg flex items-center gap-2 border border-amber-500/30"
+            title="Orchestrator: describe your task; we pick or create a template"
+          >
+            <Workflow size={16} />
+            Orchestrator
+          </button>
+          <button
             onClick={() => setShowTemplates(true)}
             className="px-5 py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 active:from-purple-700 active:to-pink-700 text-white rounded-lg text-sm font-semibold transition-all shadow-lg shadow-purple-900/20 flex items-center gap-2"
             title="Use a template"
@@ -2241,7 +2506,7 @@ function App() {
           <Plus size={18} />
         </button>
         <div className="h-6 w-px bg-white/10 mx-2"></div>
-        {sheets.map((sheet, index) => (
+        {sheets.map((sheet) => (
           <div
             key={sheet.id}
             draggable
@@ -2383,6 +2648,94 @@ function App() {
                 className="text-white/70 hover:text-white transition-colors"
               >
                 <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showOrchestratorModal && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-gray-900 border border-white/10 rounded-2xl max-w-lg w-full shadow-2xl p-6 space-y-4">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <Workflow className="text-amber-400" size={22} />
+                  Orchestrator
+                </h3>
+                <p className="text-sm text-gray-400 mt-1">
+                  Describe your main goal. The orchestrator may run several templates in sequence (hand-offs): each phase can use a different template or create one, until the goal is satisfied or the phase limit is reached. Repeating the same template is blocked to avoid loops.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !orchestratorRunning && setShowOrchestratorModal(false)}
+                className="p-1 text-gray-400 hover:text-white shrink-0"
+                disabled={orchestratorRunning}
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">Main goal</label>
+              <textarea
+                value={orchestratorPrompt}
+                onChange={(e) => setOrchestratorPrompt(e.target.value)}
+                rows={5}
+                disabled={orchestratorRunning}
+                placeholder="e.g. Daily AI newsletter with research, draft, subject lines, and email digest…"
+                className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white placeholder:text-gray-500"
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="text-sm text-gray-300 flex items-center gap-2">
+                Max hand-off phases
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={orchestratorMaxPhases}
+                  onChange={(e) =>
+                    setOrchestratorMaxPhases(
+                      Math.min(10, Math.max(1, parseInt(e.target.value, 10) || 5))
+                    )
+                  }
+                  disabled={orchestratorRunning}
+                  className="w-16 bg-black/40 border border-white/10 rounded px-2 py-1 text-sm text-white"
+                />
+              </label>
+              <span className="text-xs text-gray-500">1–10 (stops early if the goal is met)</span>
+            </div>
+            {orchestratorHandoffLog.length > 0 && (
+              <div className="max-h-32 overflow-y-auto rounded-lg bg-black/30 border border-white/5 p-2 text-xs font-mono text-gray-400 space-y-1">
+                {orchestratorHandoffLog.slice(-20).map((ev, i) => (
+                  <div key={i} className="truncate">
+                    {ev.type === 'plan_start' && `Planning phase ${ev.round}/${ev.maxPhases}…`}
+                    {ev.type === 'resolve' && `→ ${ev.instruction?.slice(0, 120)}${(ev.instruction?.length || 0) > 120 ? '…' : ''}`}
+                    {ev.type === 'phase_ready' && `Template: ${ev.templateName}`}
+                    {ev.type === 'done' && `Goal check: done`}
+                    {ev.type === 'applying' &&
+                      `Applying ${ev.phase}/${ev.total}: ${ev.templateName}`}
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => !orchestratorRunning && setShowOrchestratorModal(false)}
+                className="px-4 py-2 text-sm text-gray-300 hover:bg-white/5 rounded-lg"
+                disabled={orchestratorRunning}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleRunOrchestrator}
+                disabled={orchestratorRunning || !orchestratorPrompt.trim()}
+                className="px-4 py-2 text-sm font-medium bg-amber-600 hover:bg-amber-500 disabled:bg-gray-600 rounded-lg text-white"
+              >
+                {orchestratorRunning ? 'Working…' : 'Run'}
               </button>
             </div>
           </div>

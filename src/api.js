@@ -31,7 +31,7 @@ const API_BASE_URL = getApiBaseUrl();
 /**
  * AI Generation - Call backend API for text/image/video/audio generation
  */
-export async function generateAI(prompt, model, temperature = 0.7, maxTokens = undefined, videoSettings = undefined, audioSettings = undefined, userId = undefined) {
+export async function generateAI(prompt, model, temperature = 0.7, maxTokens = undefined, videoSettings = undefined, audioSettings = undefined) {
   try {
     const requestBody = {
       prompt,
@@ -161,7 +161,7 @@ export async function generateAI(prompt, model, temperature = 0.7, maxTokens = u
 /**
  * Check job status (for video/image generation)
  */
-export async function checkJobStatus(jobId, userId = null) {
+export async function checkJobStatus(jobId) {
   try {
     const API_BASE_URL = getApiBaseUrl();
     // Server derives userId from Firebase ID token (Authorization header).
