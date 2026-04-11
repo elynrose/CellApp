@@ -133,32 +133,33 @@ const ProjectsPage = () => {
   return (
     <div className="h-screen flex flex-col mesh-gradient text-white font-sans overflow-hidden">
       {/* Header */}
-      <div className="h-16 flex items-center px-6 justify-between glass-panel z-50 relative">
-        <div className="flex items-center gap-4">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-500 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
-            <Box size={24} strokeWidth={2.5} />
+      <div className="min-h-14 flex flex-wrap items-center justify-between gap-2 px-3 sm:px-6 py-2 sm:py-0 glass-panel z-50 relative safe-area-pt">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-9 h-9 sm:w-10 sm:h-10 shrink-0 rounded-xl bg-gradient-to-tr from-blue-500 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
+            <Box size={22} strokeWidth={2.5} className="sm:w-6 sm:h-6" />
           </div>
-          <div className="flex flex-col">
-            <h1 className="text-xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-300">
+          <div className="flex flex-col min-w-0">
+            <h1 className="text-lg sm:text-xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-300 truncate">
               Projects
             </h1>
-            <span className="text-[10px] text-gray-400 font-medium tracking-wider uppercase">Manage your projects</span>
+            <span className="text-[10px] text-gray-400 font-medium tracking-wider uppercase hidden sm:block">Manage your projects</span>
           </div>
         </div>
         <button
           onClick={() => navigate('/')}
-          className="px-4 py-2 text-gray-300 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+          className="px-3 sm:px-4 py-2 text-sm text-gray-300 hover:text-white hover:bg-white/10 rounded-lg transition-colors shrink-0"
         >
-          Back to Workspace
+          <span className="hidden sm:inline">Back to Workspace</span>
+          <span className="sm:hidden">Back</span>
         </button>
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6">
         <div className="max-w-7xl mx-auto">
           {/* Search and Create */}
-          <div className="mb-6 flex items-center gap-4">
-            <div className="relative flex-1 max-w-md">
+          <div className="mb-6 flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
+            <div className="relative flex-1 max-w-md w-full">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
               <input
                 type="text"
@@ -174,7 +175,7 @@ const ProjectsPage = () => {
                 setEditingProject(null);
                 setShowCreateModal(true);
               }}
-              className="px-5 py-2 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white rounded-lg text-sm font-semibold transition-all shadow-lg shadow-blue-900/20 flex items-center gap-2"
+              className="px-5 py-2.5 sm:py-2 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white rounded-lg text-sm font-semibold transition-all shadow-lg shadow-blue-900/20 flex items-center justify-center gap-2 shrink-0 w-full sm:w-auto"
             >
               <Plus size={16} />
               New Project

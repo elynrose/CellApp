@@ -59,11 +59,11 @@ const Canvas = ({ cells, connections = [], onCellUpdate, onCellPositionChange, o
             >
                 {({ zoomIn, zoomOut, resetTransform, ...rest }) => (
                     <>
-                        <div className="absolute top-4 right-4 z-50 flex flex-col gap-2 glass-panel p-2 rounded-xl">
-                            <button onClick={() => zoomIn()} className="p-2 hover:bg-white/10 rounded-lg text-gray-300 hover:text-white transition-colors"><ZoomIn size={18} /></button>
-                            <button onClick={() => zoomOut()} className="p-2 hover:bg-white/10 rounded-lg text-gray-300 hover:text-white transition-colors"><ZoomOut size={18} /></button>
-                            <button onClick={() => resetTransform()} className="p-2 hover:bg-white/10 rounded-lg text-gray-300 hover:text-white transition-colors"><Maximize size={18} /></button>
-                            <button onClick={() => setShowSidebar(!showSidebar)} className="p-2 hover:bg-white/10 rounded-lg text-gray-300 hover:text-white transition-colors">{showSidebar ? 'Hide' : 'Deps'}</button>
+                        <div className="absolute z-50 flex gap-1.5 glass-panel p-2 rounded-xl max-md:bottom-4 max-md:left-3 max-md:right-auto max-md:top-auto max-md:flex-row max-md:flex-wrap md:top-4 md:right-4 md:flex-col">
+                            <button type="button" onClick={() => zoomIn()} className="p-2 hover:bg-white/10 rounded-lg text-gray-300 hover:text-white transition-colors" title="Zoom in"><ZoomIn size={18} /></button>
+                            <button type="button" onClick={() => zoomOut()} className="p-2 hover:bg-white/10 rounded-lg text-gray-300 hover:text-white transition-colors" title="Zoom out"><ZoomOut size={18} /></button>
+                            <button type="button" onClick={() => resetTransform()} className="p-2 hover:bg-white/10 rounded-lg text-gray-300 hover:text-white transition-colors" title="Reset view"><Maximize size={18} /></button>
+                            <button type="button" onClick={() => setShowSidebar(!showSidebar)} className="px-2 py-2 hover:bg-white/10 rounded-lg text-gray-300 hover:text-white transition-colors text-xs font-medium whitespace-nowrap" title="Dependencies">{showSidebar ? 'Hide' : 'Deps'}</button>
                         </div>
                         <TransformComponent
                             wrapperClass="w-full h-full"

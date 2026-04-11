@@ -1343,10 +1343,10 @@ const Card = ({ cell, onUpdate, onPositionChange, onRunCell, onStopCell, onDelet
                 ref={cardRef}
                 className={`absolute glass-card rounded-2xl flex flex-col transition-shadow duration-300 ${isDragging ? 'cursor-grabbing shadow-blue-500/20' : ''} ${isResizing ? 'select-none' : ''} ${isRunning || cell.status === 'running' || cell.status === 'processing' || cell.status === 'in_progress' || cell.status === 'pending' || cell.status === 'queued' ? 'shadow-[0_0_20px_rgba(59,130,246,0.5)] shadow-blue-500/50' : ''}`}
                 style={{ 
-                    width: `${cardWidth}px`,
+                    width: `min(${cardWidth}px, calc(100vw - 1.5rem))`,
                     height: cardHeight ? `${cardHeight}px` : 'auto',
                     minHeight: '150px',
-                    minWidth: '250px',
+                    minWidth: 'min(250px, calc(100vw - 1.5rem))',
                     left: cell.x || 0,
                     top: cell.y || 0,
                     cursor: isResizing 
