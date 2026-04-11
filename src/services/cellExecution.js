@@ -432,9 +432,13 @@ export async function runCell({
   try {
     if (onProgress) onProgress({ status: 'resolving', cellId });
 
+    const cellPersistBase = { ...cell };
+    delete cellPersistBase.oversightDirective;
+
     // Create a pending generation record to track this run
     const pendingGeneration = {
       prompt: cell.prompt || '',
+      oversightDirective: cell.oversightDirective || null,
       resolvedPrompt: '',
       output: '',
       model: cell.model || 'gpt-3.5-turbo',
@@ -475,7 +479,7 @@ export async function runCell({
       };
       
       const updatedCell = {
-        ...cell,
+        ...cellPersistBase,
         generations: [...(cell.generations || []), skippedGeneration],
         updatedAt: new Date()
       };
@@ -501,7 +505,10 @@ export async function runCell({
     // Combine cell prompt template with user prompt
     const userPrompt = cell.prompt || '';
     const templatePrompt = cell.cellPrompt || '';
-    const fullPrompt = templatePrompt ? `${templatePrompt}\n\n${userPrompt}` : userPrompt;
+    let fullPrompt = templatePrompt ? `${templatePrompt}\n\n${userPrompt}` : userPrompt;
+    if (cell.oversightDirective && String(cell.oversightDirective).trim()) {
+      fullPrompt = `[Oversight — coordinated direction for this run (apply on top of the card prompt)]\n${String(cell.oversightDirective).trim()}\n\n---\n\n${fullPrompt}`;
+    }
 
     // Resolve dependencies in the prompt
     // IMPORTANT: Even though waitForDependencies already checked, we pass runningCellsSet
@@ -830,7 +837,7 @@ export async function runCell({
       };
 
       const updatedCell = {
-        ...cell,
+        ...cellPersistBase,
         status: 'pending',
         jobId: result.jobId,
         model,
@@ -1001,7 +1008,7 @@ export async function runCell({
 
     // Update cell with new output and add to generations array
     const updatedCell = {
-      ...cell,
+      ...cellPersistBase,
       output,
       model,
       temperature,
@@ -1041,7 +1048,7 @@ export async function runCell({
     
     // Update cell with error generation
     const updatedCell = {
-      ...cell,
+      ...cellPersistBase,
       generations: [...(cell.generations || []), errorGeneration],
       updatedAt: new Date()
     };

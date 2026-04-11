@@ -3,10 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { onAuthStateChange, getCurrentUser } from './firebase/auth';
 import { getProjects, createProject, getSheets, createSheet, deleteSheet, updateSheet, getSheetCells, saveCell, getActiveModels, deleteCell, getUserSubscription, subscribeToSheetCells, syncScheduleForCell } from './firebase/firestore';
 import { runCell, runCells, formatOutput, pollJobStatus, cancelPolling } from './services/cellExecution';
+import { runOversightOrchestration } from './services/oversightOrchestrator';
 import { parseDependencies, findDependentCells } from './utils/dependencies';
 import { getModelType } from './api';
 import Canvas from './components/Canvas';
-import { Plus, Box, Grid, Trash2, Play, LogOut, User, Shield, Crown, X, AlertCircle, Sparkles, Check, Edit2, GripVertical, ChevronDown, FolderOpen, Copy, FileText, Download } from 'lucide-react';
+import { Plus, Box, Grid, Trash2, Play, LogOut, User, Shield, Crown, X, AlertCircle, Sparkles, Check, Edit2, GripVertical, ChevronDown, FolderOpen, Copy, FileText, Download, Telescope } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { signInWithGoogle, signOutUser, isCurrentUserAdmin } from './firebase/auth';
 import AdminDashboard from './components/AdminDashboard';
@@ -39,6 +40,10 @@ function App() {
   const [notification, setNotification] = useState(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [showOversightModal, setShowOversightModal] = useState(false);
+  const [oversightGoal, setOversightGoal] = useState('');
+  const [oversightRunning, setOversightRunning] = useState(false);
+  const [oversightLog, setOversightLog] = useState([]);
 
   // Auto-dismiss notifications after 8 seconds
   useEffect(() => {
@@ -1020,12 +1025,19 @@ function App() {
     console.log('🛑 Stopped cells:', Array.from(cellsToStop));
   };
 
-  const handleRunCell = async (cellId) => {
+  const handleRunCell = async (cellId, options = {}) => {
     if (!user || !currentProjectId || !activeSheet) return;
     if (runningCells.has(cellId)) return;
 
+    const { oversightDirective = null, skipChain = false } = options;
+
     const cell = cells[cellId];
     if (!cell || !cell.prompt) return;
+
+    const cellForRun =
+      oversightDirective && String(oversightDirective).trim()
+        ? { ...cell, oversightDirective: String(oversightDirective).trim() }
+        : cell;
 
     setRunningCells(prev => {
       const next = new Set(prev);
@@ -1037,7 +1049,7 @@ function App() {
     try {
       const result = await runCell({
         cellId,
-        cell,
+        cell: cellForRun,
         userId: user.uid,
         projectId: currentProjectId,
         sheetId: activeSheet.id,
@@ -1201,7 +1213,7 @@ function App() {
         });
       }
 
-      if (result.success) {
+      if (result.success && !skipChain) {
         // Cell output already updated via onProgress callback
         // Wait a bit for state to update, then check for dependent cells with autorun
         await new Promise(resolve => setTimeout(resolve, 50));
@@ -1375,6 +1387,84 @@ function App() {
       });
     });
   }, [cells, user, currentProjectId, activeSheet]);
+
+  const handleRunOversight = async () => {
+    if (!user || !currentProjectId || !activeSheet || oversightRunning) return;
+    const goal = oversightGoal.trim();
+    if (!goal) {
+      setNotification({
+        type: 'error',
+        title: 'Goal required',
+        message: 'Describe what success looks like for this sheet.',
+        showUpgrade: false
+      });
+      return;
+    }
+
+    setOversightRunning(true);
+    setOversightLog([]);
+
+    try {
+      const result = await runOversightOrchestration({
+        goal,
+        getCellsMap: () => cellsRef.current,
+        manualConnections: connections,
+        sheetName: activeSheet.name || 'Sheet',
+        userId: user.uid,
+        projectId: currentProjectId,
+        sheetId: activeSheet.id,
+        sheets: sheets.map((s) => ({
+          ...s,
+          cells: s.id === activeSheet.id ? cellsRef.current : {}
+        })),
+        activeSheet,
+        oversightModel: defaultModel,
+        maxRounds: 6,
+        runCellWithOversight: async (cellId, directive) => {
+          await handleRunCell(cellId, { oversightDirective: directive, skipChain: true });
+          return { success: true };
+        },
+        onProgress: (ev) => {
+          setOversightLog((prev) => [...prev, ev]);
+        }
+      });
+
+      setOversightLog((prev) => [...prev, { type: 'done', result }]);
+
+      if (result.success && result.complete) {
+        setNotification({
+          type: 'success',
+          title: 'Oversight complete',
+          message: result.summary || 'Goal achieved.',
+          showUpgrade: false
+        });
+        setShowOversightModal(false);
+      } else if (result.success && !result.complete) {
+        setNotification({
+          type: 'info',
+          title: 'Oversight paused',
+          message: result.message || result.stoppedReason || 'Review the log.',
+          showUpgrade: false
+        });
+      } else {
+        setNotification({
+          type: 'error',
+          title: 'Oversight failed',
+          message: result.error || 'Unknown error',
+          showUpgrade: false
+        });
+      }
+    } catch (e) {
+      setNotification({
+        type: 'error',
+        title: 'Oversight error',
+        message: e?.message || String(e),
+        showUpgrade: false
+      });
+    } finally {
+      setOversightRunning(false);
+    }
+  };
 
   const handleRunAllCells = async () => {
     if (!user || !currentProjectId || !activeSheet) return;
@@ -2143,6 +2233,15 @@ function App() {
             <Sparkles size={16} />
             Templates
           </button>
+          <button
+            onClick={() => setShowOversightModal(true)}
+            disabled={!activeSheet || cellsArray.length === 0 || oversightRunning}
+            className="px-5 py-2 bg-emerald-700/90 hover:bg-emerald-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition-all shadow-lg flex items-center gap-2 border border-emerald-500/30"
+            title="Oversight agent: coordinate all cards toward one goal"
+          >
+            <Telescope size={16} />
+            Oversight
+          </button>
           {/* User Menu */}
           {user && (
             <div className="relative user-menu-container">
@@ -2442,6 +2541,74 @@ function App() {
         onSelectTemplate={applyTemplate}
         availableModels={availableModels}
       />
+
+      {showOversightModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-gray-900 border border-white/10 rounded-2xl max-w-lg w-full shadow-2xl p-6 space-y-4">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <Telescope className="text-emerald-400" size={22} />
+                  Oversight agent
+                </h3>
+                <p className="text-sm text-gray-400 mt-1">
+                  Reviews every card and the connection graph, then runs coordinated rounds: each round it injects fresh directions into the cards that need to move. Repeats until the goal is met or max rounds. Uses credits for each planning step and each card run.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !oversightRunning && setShowOversightModal(false)}
+                className="p-1 text-gray-400 hover:text-white"
+                disabled={oversightRunning}
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">Main goal</label>
+              <textarea
+                value={oversightGoal}
+                onChange={(e) => setOversightGoal(e.target.value)}
+                rows={4}
+                placeholder="e.g. Produce a one-page brief and a 3-bullet executive summary; ensure all facts agree across cards."
+                className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white placeholder:text-gray-500"
+                disabled={oversightRunning}
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => !oversightRunning && setShowOversightModal(false)}
+                className="px-4 py-2 text-sm text-gray-300 hover:bg-white/5 rounded-lg"
+                disabled={oversightRunning}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleRunOversight}
+                disabled={oversightRunning || !oversightGoal.trim()}
+                className="px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 rounded-lg text-white"
+              >
+                {oversightRunning ? 'Running…' : 'Start'}
+              </button>
+            </div>
+            {oversightLog.length > 0 && (
+              <div className="max-h-40 overflow-y-auto text-xs font-mono bg-black/30 rounded-lg p-2 text-gray-400 border border-white/5">
+                {oversightLog.slice(-12).map((ev, i) => (
+                  <div key={i} className="truncate">
+                    {ev.type === 'round' && ev.plan?.success === false && `Round ${ev.round}: plan error`}
+                    {ev.type === 'round' && ev.plan?.success && `Round ${ev.round}: ${ev.plan.complete ? 'complete' : ev.plan.summary || '…'}`}
+                    {ev.type === 'cell_start' && `→ ${ev.cellId}`}
+                    {ev.type === 'cell_done' && `✓ ${ev.cellId}`}
+                    {ev.type === 'done' && JSON.stringify(ev.result?.stoppedReason || ev.result?.complete)}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <GenerationSelectModal
         isOpen={showGenerationSelect}
