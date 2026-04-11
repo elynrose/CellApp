@@ -10,6 +10,7 @@ import { saveCell, saveGeneration, deductCredits, getUserSubscription, resetMont
 import { optimizePrompt, shouldOptimizePrompt } from '../utils/promptOptimizer';
 import { uploadImageFromUrl, uploadVideoFromUrl, uploadAudioFromUrl } from '../firebase/storage';
 import { getCreditCost, hasEnoughCredits, getPlanById } from '../services/subscriptions';
+import { inferProviderFromModel } from '../utils/modelProvider';
 
 /**
  * Get format instructions based on output format setting
@@ -719,7 +720,15 @@ export async function runCell({
       console.log(`🎬 cellExecution: Before generateAI call - seconds type: ${typeof videoSettings.seconds}, value: "${videoSettings.seconds}"`);
     }
 
-    const result = await generateAI(finalPrompt, model, temperature, maxTokens, videoSettings, audioSettings);
+    const result = await generateAI(
+      finalPrompt,
+      model,
+      temperature,
+      maxTokens,
+      videoSettings,
+      audioSettings,
+      inferProviderFromModel(model)
+    );
     
     // Deduct credits after successful generation
     if (result.success) {

@@ -54,15 +54,126 @@ async function getUserApiKeyAndSubscription(userId) {
     const subscription = userData.subscription || 'free';
     const isPro = subscription === 'pro' || subscription === 'enterprise';
     
+    const providerApiKeys = userData.providerApiKeys || {};
+
     return {
-      hasUserApiKey: !!userApiKey && userApiKey.trim() !== '',
-      apiKey: userApiKey || null,
-      isPro: isPro
+      hasUserApiKey: !!userApiKey && String(userApiKey).trim() !== '',
+      apiKey: userApiKey ? String(userApiKey).trim() : null,
+      isPro,
+      providerApiKeys
     };
   } catch (error) {
     console.error('Error getting user API key:', error);
-    return { hasUserApiKey: false, apiKey: null, isPro: false };
+    return { hasUserApiKey: false, apiKey: null, isPro: false, providerApiKeys: {} };
   }
+}
+
+/** Keep in sync with src/utils/modelProvider.js */
+function inferProviderFromModel(model) {
+  const m = String(model || '').toLowerCase();
+  if (!m) return 'openai';
+  if (m.includes('gemini') || m.includes('imagen')) return 'gemini';
+  if (m.startsWith('openrouter/') || m.includes('openrouter')) return 'openrouter';
+  if (m.startsWith('grok-') || m.startsWith('grok/') || m.startsWith('x-ai/') || m.startsWith('xai/')) {
+    return 'grok';
+  }
+  if (m.startsWith('ollama:') || m.startsWith('ollama/')) return 'ollama';
+  if (m.startsWith('lmstudio') || m.startsWith('lm-studio') || m.includes('lm_studio')) return 'lmstudio';
+  if (m.includes('fal-ai/') || m.startsWith('fal/') || m.startsWith('fal:')) return 'fal';
+  return 'openai';
+}
+
+function postHttpsOrHttpJson(fullUrl, bodyObj, headerAdd = {}) {
+  return new Promise((resolve, reject) => {
+    let u;
+    try {
+      u = new URL(fullUrl);
+    } catch (e) {
+      reject(new Error(`Invalid URL: ${fullUrl}`));
+      return;
+    }
+    const lib = u.protocol === 'https:' ? https : http;
+    const bodyStr = JSON.stringify(bodyObj);
+    const port = u.port
+      ? Number(u.port)
+      : (u.protocol === 'https:' ? 443 : 80);
+    const opts = {
+      hostname: u.hostname,
+      port,
+      path: u.pathname + u.search,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(bodyStr),
+        ...headerAdd
+      },
+      timeout: 120000
+    };
+    const req = lib.request(opts, (res) => {
+      let data = '';
+      res.on('data', (c) => {
+        data += c;
+      });
+      res.on('end', () => {
+        if (res.statusCode >= 400) {
+          reject(new Error(`HTTP ${res.statusCode}: ${data.substring(0, 500)}`));
+          return;
+        }
+        try {
+          resolve(JSON.parse(data || '{}'));
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(120000, () => {
+      req.destroy();
+      reject(new Error('Request timeout'));
+    });
+    req.write(bodyStr);
+    req.end();
+  });
+}
+
+async function openAICompatibleChat(baseUrl, apiKey, model, prompt, temperature, maxTokens, extraHeaders = {}) {
+  const root = String(baseUrl).replace(/\/$/, '');
+  const path = /\/v1$/i.test(root) ? '/chat/completions' : '/v1/chat/completions';
+  const url = `${root}${path}`;
+  const body = {
+    model,
+    messages: [{ role: 'user', content: prompt }],
+    temperature
+  };
+  if (maxTokens !== undefined && maxTokens > 0) {
+    body.max_tokens = maxTokens;
+  }
+  const headers = { ...extraHeaders };
+  if (apiKey && String(apiKey).trim()) {
+    headers.Authorization = `Bearer ${String(apiKey).trim()}`;
+  }
+  const data = await postHttpsOrHttpJson(url, body, headers);
+  const text = data.choices?.[0]?.message?.content || 'No response generated';
+  return { text };
+}
+
+function stripOllamaModelName(model) {
+  return String(model || '')
+    .replace(/^ollama[:/]/i, '')
+    .trim() || 'llama3';
+}
+
+async function ollamaNativeChat(baseUrl, model, prompt, temperature) {
+  const url = `${String(baseUrl).replace(/\/$/, '')}/api/chat`;
+  const body = {
+    model: stripOllamaModelName(model),
+    messages: [{ role: 'user', content: prompt }],
+    stream: false,
+    options: { temperature }
+  };
+  const data = await postHttpsOrHttpJson(url, body, {});
+  const text = data.message?.content || data.response || 'No response generated';
+  return { text };
 }
 
 // Local development configuration
@@ -929,55 +1040,65 @@ function getVideoContent(jobId, apiKey, resolve, reject) {
 }
 
 /**
- * Call AI API using OpenAI and Gemini only
+ * Call AI API (OpenAI, Gemini, OpenRouter, xAI Grok, LM Studio, Ollama, etc.)
  */
-async function callHybridAI(model, prompt, temperature = 0.7, maxTokens = undefined, videoSettings = undefined, audioSettings = undefined, userId = null) {
+async function callHybridAI(model, prompt, temperature = 0.7, maxTokens = undefined, videoSettings = undefined, audioSettings = undefined, userId = null, providerHint = null) {
   try {
     // Initialize skipCreditDeduction to false by default
     const skipCreditDeduction = false;
     
-    // Get API keys - prefer user's API key if provided, otherwise use environment variables (Pro only)
     let openaiApiKey = process.env.OPENAI_API_KEY;
     let geminiApiKey = process.env.GEMINI_API_KEY;
+    try {
+      const gk = await getGeminiApiKey();
+      if (gk) {
+        geminiApiKey = gk;
+      }
+    } catch (e) {
+      // ignore
+    }
+
     let isPro = false;
-    
-    // Try to get user's API key and subscription status if userId is provided
+    let providerApiKeys = {};
+    const providerForPolicy = providerHint || inferProviderFromModel(model || '');
+
     if (userId) {
       try {
         const userApiKeyData = await getUserApiKeyAndSubscription(userId);
         isPro = userApiKeyData.isPro;
-        
+        providerApiKeys = userApiKeyData.providerApiKeys || {};
+
         if (userApiKeyData.hasUserApiKey && userApiKeyData.apiKey) {
-          // User has their own API key - use it regardless of subscription
           openaiApiKey = userApiKeyData.apiKey;
           console.log(`✅ Using user's OpenAI API key for generation`);
-        } else if (!isPro) {
-          // User doesn't have their own API key and is not Pro - cannot use environment key
+        } else if (providerForPolicy === 'openai' && !isPro) {
           throw new Error('Pro subscription required to use shared API key. Please upgrade to Pro or add your own OpenAI API key in your profile settings.');
-        } else {
-          // User is Pro but doesn't have their own API key - can use environment key
+        } else if (providerForPolicy === 'openai' && isPro) {
           console.log(`✅ Using environment OpenAI API key (Pro subscription)`);
         }
+
+        if (providerApiKeys.gemini && String(providerApiKeys.gemini).trim()) {
+          geminiApiKey = String(providerApiKeys.gemini).trim();
+          console.log(`✅ Using user's Gemini API key from profile`);
+        }
       } catch (userKeyError) {
-        // If error is about Pro requirement, re-throw it
         if (userKeyError.message && userKeyError.message.includes('Pro subscription required')) {
           throw userKeyError;
         }
-        // Otherwise, log warning and continue with environment key (for backward compatibility)
         console.warn(`⚠️ Could not get user API key, using environment key:`, userKeyError.message);
       }
     } else {
-      // No userId provided - allow using environment key (for admin/system use)
       console.log(`ℹ️ No userId provided, using environment API key`);
     }
     
     // Normalize model name - fix common typos
     if (model) {
-      // Fix common model name typos
-      model = model.replace(/gpt-3-5-turbo/g, 'gpt-3.5-turbo'); // Fix hyphen instead of dot
-      model = model.replace(/gpt-4-turbo/g, 'gpt-4-turbo'); // Keep as is
+      model = model.replace(/gpt-3-5-turbo/g, 'gpt-3.5-turbo');
+      model = model.replace(/gpt-4-turbo/g, 'gpt-4-turbo');
       model = model.trim();
     }
+
+    const provider = providerHint || inferProviderFromModel(model);
 
     // Determine model type and provider
     const isImageModel = model.includes('dall-e') || model.includes('imagen');
@@ -986,6 +1107,49 @@ async function callHybridAI(model, prompt, temperature = 0.7, maxTokens = undefi
     const isTextModel = !isImageModel && !isVideoModel && !isAudioModel; // Text model if not image/video/audio
     const isGeminiModel = model.includes('gemini') || model.includes('imagen');
     const isOpenAIModel = !isGeminiModel; // Default to OpenAI if not Gemini
+
+    // OpenAI-compatible third-party text endpoints (user keys from profile)
+    if (isTextModel) {
+      if (provider === 'openrouter') {
+        const k = (providerApiKeys.openrouter || '').trim();
+        if (!k) {
+          throw new Error('Add your OpenRouter API key under Profile → API providers.');
+        }
+        const out = await openAICompatibleChat('https://openrouter.ai/api/v1', k, model, prompt, temperature, maxTokens, {
+          'HTTP-Referer': process.env.OPENROUTER_REFERER || 'https://localhost',
+          'X-Title': 'Cellulai'
+        });
+        return { text: out.text, skipCreditDeduction };
+      }
+      if (provider === 'grok') {
+        const k = (providerApiKeys.grok || '').trim();
+        if (!k) {
+          throw new Error('Add your xAI (Grok) API key under Profile → API providers.');
+        }
+        const out = await openAICompatibleChat('https://api.x.ai/v1', k, model, prompt, temperature, maxTokens);
+        return { text: out.text, skipCreditDeduction };
+      }
+      if (provider === 'lmstudio') {
+        const lm = providerApiKeys.lmStudio || {};
+        const base = (lm.baseUrl || 'http://127.0.0.1:1234').trim();
+        const k = (lm.apiKey || '').trim();
+        const out = await openAICompatibleChat(base, k, model, prompt, temperature, maxTokens);
+        return { text: out.text, skipCreditDeduction };
+      }
+      if (provider === 'ollama') {
+        const ob = providerApiKeys.ollama || {};
+        const base = (ob.baseUrl || 'http://127.0.0.1:11434').trim();
+        const out = await ollamaNativeChat(base, model, prompt, temperature);
+        return { text: out.text, skipCreditDeduction };
+      }
+      if (provider === 'fal') {
+        const k = (providerApiKeys.fal || '').trim();
+        if (!k) {
+          throw new Error('Add your Fal API key under Profile → API providers.');
+        }
+        throw new Error('Fal models use model-specific HTTP endpoints; generation for this model is not wired on the server yet. Your API key is saved for future use.');
+      }
+    }
 
     if (isVideoModel && isOpenAIModel && (model.includes('sora-2') || model.includes('sora-2-pro'))) {
       // Video generation via OpenAI Sora 2 API
@@ -1143,7 +1307,7 @@ async function callHybridAI(model, prompt, temperature = 0.7, maxTokens = undefi
       if (isGeminiModel && model.includes('imagen')) {
         // Gemini Imagen image generation
         if (!geminiApiKey) {
-          throw new Error('Gemini API key is required for image generation. Please configure GEMINI_API_KEY.');
+          throw new Error('Gemini API key is required for image generation. Add your key in Profile → API providers or configure server GEMINI_API_KEY / Firestore settings.');
         }
 
         // Imagen uses Vertex AI API, but for simplicity we'll use a placeholder
@@ -1202,7 +1366,7 @@ async function callHybridAI(model, prompt, temperature = 0.7, maxTokens = undefi
       if (isGeminiModel) {
         // Gemini text generation
         if (!geminiApiKey) {
-          throw new Error('Gemini API key is required for text generation. Please configure GEMINI_API_KEY.');
+          throw new Error('Gemini API key is required for text generation. Add your key in Profile → API providers or configure server GEMINI_API_KEY / Firestore settings.');
         }
 
         const requestBody = {
@@ -2405,6 +2569,7 @@ window.storage = storage;`;
           const model = data.model || 'gpt-3.5-turbo';
           const temperature = data.temperature || 0.7;
           const maxTokens = data.max_tokens || data.maxTokens || undefined;
+          const providerFromClient = typeof data.provider === 'string' ? data.provider : null;
           // Derive userId from verified token (production). In dev, allow request body fallback for convenience.
           const userId = verifiedUserId || (process.env.NODE_ENV !== 'production' ? (data.userId || null) : null);
           // CRITICAL: Check the raw body string BEFORE parsing to see if seconds is quoted
@@ -2479,7 +2644,7 @@ window.storage = storage;`;
           console.log(`🚀 API Request - Model: ${model}, Prompt: ${prompt.substring(0, 50)}..., MaxTokens: ${maxTokens || 'default'}, VideoSettings: ${videoSettings ? JSON.stringify(videoSettings) : 'none'}, AudioSettings: ${audioSettings ? JSON.stringify(audioSettings) : 'none'}, UserId: ${userId || 'none'}`);
 
           // Call AI API (OpenAI and Gemini) - pass userId to use user's API key if available
-          const response = await callHybridAI(model, prompt, temperature, maxTokens, videoSettings, audioSettings, userId);
+          const response = await callHybridAI(model, prompt, temperature, maxTokens, videoSettings, audioSettings, userId, providerFromClient);
 
           // Check if response is a job object (for async operations like video generation)
           if (response && typeof response === 'object' && response.jobId) {

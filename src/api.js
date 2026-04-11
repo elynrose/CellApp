@@ -3,6 +3,7 @@
  */
 
 import { auth } from './firebase/config';
+import { inferProviderFromModel } from './utils/modelProvider';
 
 async function getAuthHeaders() {
   try {
@@ -31,12 +32,22 @@ const API_BASE_URL = getApiBaseUrl();
 /**
  * AI Generation - Call backend API for text/image/video/audio generation
  */
-export async function generateAI(prompt, model, temperature = 0.7, maxTokens = undefined, videoSettings = undefined, audioSettings = undefined) {
+export async function generateAI(
+  prompt,
+  model,
+  temperature = 0.7,
+  maxTokens = undefined,
+  videoSettings = undefined,
+  audioSettings = undefined,
+  provider = undefined
+) {
   try {
+    const resolvedProvider = provider || inferProviderFromModel(model);
     const requestBody = {
       prompt,
       model,
-      temperature
+      temperature,
+      provider: resolvedProvider
     };
     
     // Add max_tokens if specified (for text generation)

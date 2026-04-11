@@ -92,6 +92,11 @@ service cloud.firestore {
     match /admin/{configKey} {
       allow read, write: if isAdmin();
     }
+
+    // Server-side API key storage (read by backend; editable by admins in dashboard)
+    match /settings/{docId} {
+      allow read, write: if isAdmin();
+    }
     
     // Deny all other collections
     match /{document=**} {

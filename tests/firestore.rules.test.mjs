@@ -87,6 +87,12 @@ async function main() {
   await assertSucceeds(admin.doc('users/bob').update({ subscription: 'pro' }));
   await assertSucceeds(admin.doc('users/bob').update({ stripeCustomerId: 'cus_123' }));
 
+  // 5) Server settings docs: admin only
+  await assertSucceeds(admin.doc('settings/openai').set({ apiKey: 'test-openai' }));
+  await assertSucceeds(admin.doc('settings/openai').get());
+  await assertFails(alice.doc('settings/openai').get());
+  await assertFails(alice.doc('settings/openai').set({ apiKey: 'nope' }));
+
   // Cleanup
   await testEnv.cleanup();
   // eslint-disable-next-line no-console

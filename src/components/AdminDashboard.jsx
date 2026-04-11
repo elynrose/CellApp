@@ -3,7 +3,7 @@ import {
   Shield, Users, FolderOpen, Brain, Crown, CreditCard, 
   BarChart3, Settings, LogOut, Plus, Edit, Trash2, 
   RefreshCw, Search, X, Check, AlertCircle, Coins, Sparkles,
-  ChevronLeft, ChevronRight 
+  ChevronLeft, ChevronRight, Key, Server
 } from 'lucide-react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, 
@@ -14,11 +14,11 @@ import {
   getAllUsers, updateUser, deleteUser, 
   getAllProjects, deleteProject,
   getAllModels, createModel, updateModel, deleteModel,
-  getAdminConfig, setAdminConfig,
   getUserSubscription, resetMonthlyCredits, updateUserCredits, addCredits,
   getAllPackages, createPackage, updatePackage, deletePackage,
   getAllGenerations,
-  getAllTemplates, createTemplate, updateTemplate, deleteTemplate
+  getAllTemplates, createTemplate, updateTemplate, deleteTemplate,
+  getSettingsDoc, setSettingsDoc, clearSettingsField
 } from '../firebase/firestore';
 import { getSubscriptionPlans, getPlanById } from '../services/subscriptions';
 
@@ -79,6 +79,15 @@ const AdminDashboard = ({ user, onBack }) => {
     template: { open: false, editing: null }
   });
   const [formData, setFormData] = useState({});
+  const [systemSettings, setSystemSettings] = useState({
+    openAiConfigured: false,
+    geminiConfigured: false,
+    openAiKeyInput: '',
+    geminiKeyInput: '',
+    openAiUpdatedAt: null,
+    geminiUpdatedAt: null,
+    loading: false
+  });
   const [notifications, setNotifications] = useState([]);
   const [pagination, setPagination] = useState({
     users: { page: 1, perPage: 10 },
@@ -635,6 +644,130 @@ const AdminDashboard = ({ user, onBack }) => {
     setTimeout(() => {
       setNotifications(prev => prev.filter(n => n.id !== id));
     }, 5000);
+  };
+
+  const formatFirestoreTime = (ts) => {
+    if (!ts) return null;
+    try {
+      const d = typeof ts.toDate === 'function' ? ts.toDate() : new Date(ts);
+      if (Number.isNaN(d.getTime())) return null;
+      return d.toLocaleString();
+    } catch {
+      return null;
+    }
+  };
+
+  const loadSystemSettings = async () => {
+    setSystemSettings((prev) => ({ ...prev, loading: true }));
+    try {
+      const [openaiRes, geminiRes] = await Promise.all([
+        getSettingsDoc('openai'),
+        getSettingsDoc('gemini')
+      ]);
+      setSystemSettings((prev) => ({
+        ...prev,
+        loading: false,
+        openAiConfigured: !!(openaiRes.success && openaiRes.data?.apiKey),
+        geminiConfigured: !!(geminiRes.success && geminiRes.data?.apiKey),
+        openAiUpdatedAt: openaiRes.success && openaiRes.data ? openaiRes.data.updatedAt : null,
+        geminiUpdatedAt: geminiRes.success && geminiRes.data ? geminiRes.data.updatedAt : null,
+        openAiKeyInput: '',
+        geminiKeyInput: ''
+      }));
+    } catch {
+      setSystemSettings((prev) => ({ ...prev, loading: false }));
+      showNotification('Failed to load system settings', 'error');
+    }
+  };
+
+  useEffect(() => {
+    if (isAdmin && activeSection === 'settings') {
+      loadSystemSettings();
+    }
+  }, [isAdmin, activeSection]);
+
+  const handleSaveOpenAiKey = async () => {
+    const key = systemSettings.openAiKeyInput.trim();
+    if (!key) {
+      showNotification('Paste an API key before saving.', 'error');
+      return;
+    }
+    const result = await setSettingsDoc('openai', { apiKey: key });
+    if (result.success) {
+      showNotification('OpenAI API key saved.', 'success');
+      setSystemSettings((prev) => ({
+        ...prev,
+        openAiKeyInput: '',
+        openAiConfigured: true
+      }));
+      await loadSystemSettings();
+    } else {
+      showNotification(`Failed to save OpenAI key: ${result.error}`, 'error');
+    }
+  };
+
+  const handleSaveGeminiKey = async () => {
+    const key = systemSettings.geminiKeyInput.trim();
+    if (!key) {
+      showNotification('Paste an API key before saving.', 'error');
+      return;
+    }
+    const result = await setSettingsDoc('gemini', { apiKey: key });
+    if (result.success) {
+      showNotification('Gemini API key saved.', 'success');
+      setSystemSettings((prev) => ({
+        ...prev,
+        geminiKeyInput: '',
+        geminiConfigured: true
+      }));
+      await loadSystemSettings();
+    } else {
+      showNotification(`Failed to save Gemini key: ${result.error}`, 'error');
+    }
+  };
+
+  const handleClearOpenAiKey = async () => {
+    if (
+      !window.confirm(
+        'Remove the stored OpenAI key? The server will use the OPENAI_API_KEY environment variable when this key is absent.'
+      )
+    ) {
+      return;
+    }
+    const result = await clearSettingsField('openai', 'apiKey');
+    if (result.success) {
+      showNotification('OpenAI key removed from Firestore.', 'success');
+      setSystemSettings((prev) => ({
+        ...prev,
+        openAiConfigured: false,
+        openAiKeyInput: ''
+      }));
+      await loadSystemSettings();
+    } else {
+      showNotification(`Failed to remove key: ${result.error}`, 'error');
+    }
+  };
+
+  const handleClearGeminiKey = async () => {
+    if (
+      !window.confirm(
+        'Remove the stored Gemini key? The server will use the GEMINI_API_KEY environment variable when this key is absent.'
+      )
+    ) {
+      return;
+    }
+    const result = await clearSettingsField('gemini', 'apiKey');
+    if (result.success) {
+      showNotification('Gemini key removed from Firestore.', 'success');
+      setSystemSettings((prev) => ({
+        ...prev,
+        geminiConfigured: false,
+        geminiKeyInput: ''
+      }));
+      await loadSystemSettings();
+    } else {
+      showNotification(`Failed to remove key: ${result.error}`, 'error');
+    }
   };
 
   const handleLogout = async () => {
@@ -2638,11 +2771,150 @@ const AdminDashboard = ({ user, onBack }) => {
 
           {/* Settings Section */}
           {activeSection === 'settings' && (
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">System Settings</h3>
-              <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-                This section is coming soon
+            <div className="space-y-6">
+              <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-4 flex gap-3">
+                <Server className="h-5 w-5 text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" />
+                <div className="text-sm text-amber-900 dark:text-amber-100/90">
+                  <p className="font-medium text-amber-950 dark:text-amber-50 mb-1">Server API keys</p>
+                  <p className="text-amber-800 dark:text-amber-200/90">
+                    Keys stored here are read by the production backend (same documents as{' '}
+                    <code className="px-1 py-0.5 rounded bg-amber-100/80 dark:bg-amber-900/50 font-mono text-xs">
+                      settings/openai
+                    </code>{' '}
+                    and{' '}
+                    <code className="px-1 py-0.5 rounded bg-amber-100/80 dark:bg-amber-900/50 font-mono text-xs">
+                      settings/gemini
+                    </code>
+                    ). If a key is not set in Firestore, the server falls back to environment variables when configured.
+                  </p>
+                </div>
               </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+                  <div className="flex items-start justify-between gap-4 mb-4">
+                    <div className="flex items-center gap-2">
+                      <Key className="h-5 w-5 text-gray-500 dark:text-gray-400" />
+                      <h3 className="text-lg font-semibold text-gray-900 dark:text-white">OpenAI</h3>
+                    </div>
+                    <span
+                      className={`text-xs font-medium px-2 py-1 rounded-full ${
+                        systemSettings.openAiConfigured
+                          ? 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300'
+                          : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+                      }`}
+                    >
+                      {systemSettings.openAiConfigured ? 'Key on file' : 'Not set'}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                    Used for shared / server-side OpenAI calls (including Sora, images, and text) when no user key applies.
+                  </p>
+                  {systemSettings.openAiUpdatedAt && (
+                    <p className="text-xs text-gray-400 dark:text-gray-500 mb-3">
+                      Last updated: {formatFirestoreTime(systemSettings.openAiUpdatedAt) || '—'}
+                    </p>
+                  )}
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                    New API key
+                  </label>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={systemSettings.openAiKeyInput}
+                    onChange={(e) =>
+                      setSystemSettings((prev) => ({ ...prev, openAiKeyInput: e.target.value }))
+                    }
+                    placeholder={systemSettings.openAiConfigured ? 'Enter a new key to replace' : 'sk-...'}
+                    className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm font-mono mb-4"
+                    disabled={systemSettings.loading}
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveOpenAiKey}
+                      disabled={systemSettings.loading}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
+                    >
+                      Save key
+                    </button>
+                    {systemSettings.openAiConfigured && (
+                      <button
+                        type="button"
+                        onClick={handleClearOpenAiKey}
+                        disabled={systemSettings.loading}
+                        className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 text-gray-800 dark:text-gray-200 text-sm rounded-lg transition-colors"
+                      >
+                        Remove key
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+                  <div className="flex items-start justify-between gap-4 mb-4">
+                    <div className="flex items-center gap-2">
+                      <Key className="h-5 w-5 text-gray-500 dark:text-gray-400" />
+                      <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Google Gemini</h3>
+                    </div>
+                    <span
+                      className={`text-xs font-medium px-2 py-1 rounded-full ${
+                        systemSettings.geminiConfigured
+                          ? 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300'
+                          : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+                      }`}
+                    >
+                      {systemSettings.geminiConfigured ? 'Key on file' : 'Not set'}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                    Used when Gemini-backed models run on the server.
+                  </p>
+                  {systemSettings.geminiUpdatedAt && (
+                    <p className="text-xs text-gray-400 dark:text-gray-500 mb-3">
+                      Last updated: {formatFirestoreTime(systemSettings.geminiUpdatedAt) || '—'}
+                    </p>
+                  )}
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                    New API key
+                  </label>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={systemSettings.geminiKeyInput}
+                    onChange={(e) =>
+                      setSystemSettings((prev) => ({ ...prev, geminiKeyInput: e.target.value }))
+                    }
+                    placeholder={systemSettings.geminiConfigured ? 'Enter a new key to replace' : 'AIza...'}
+                    className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm font-mono mb-4"
+                    disabled={systemSettings.loading}
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveGeminiKey}
+                      disabled={systemSettings.loading}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
+                    >
+                      Save key
+                    </button>
+                    {systemSettings.geminiConfigured && (
+                      <button
+                        type="button"
+                        onClick={handleClearGeminiKey}
+                        disabled={systemSettings.loading}
+                        className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 text-gray-800 dark:text-gray-200 text-sm rounded-lg transition-colors"
+                      >
+                        Remove key
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {systemSettings.loading && (
+                <p className="text-sm text-gray-500 dark:text-gray-400 text-center">Loading settings…</p>
+              )}
             </div>
           )}
         </div>

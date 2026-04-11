@@ -675,6 +675,53 @@ export async function setAdminConfig(configKey, configData) {
 }
 
 /**
+ * System settings documents (e.g. settings/openai, settings/gemini) — admin only per rules.
+ */
+export async function getSettingsDoc(docId) {
+  try {
+    const snap = await getDoc(doc(db, 'settings', docId));
+    if (!snap.exists()) {
+      return { success: true, data: null };
+    }
+    return { success: true, data: snap.data() };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+export async function setSettingsDoc(docId, data) {
+  try {
+    await setDoc(
+      doc(db, 'settings', docId),
+      {
+        ...data,
+        updatedAt: serverTimestamp()
+      },
+      { merge: true }
+    );
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+export async function clearSettingsField(docId, fieldName) {
+  try {
+    const ref = doc(db, 'settings', docId);
+    await updateDoc(ref, {
+      [fieldName]: deleteField(),
+      updatedAt: serverTimestamp()
+    });
+    return { success: true };
+  } catch (error) {
+    if (error.code === 'not-found') {
+      return { success: true };
+    }
+    return { success: false, error: error.message };
+  }
+}
+
+/**
  * Subscription Functions
  */
 
