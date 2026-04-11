@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { onAuthStateChange, getCurrentUser } from './firebase/auth';
 import { getProjects, createProject, getSheets, createSheet, deleteSheet, updateSheet, getSheetCells, saveCell, getActiveModels, deleteCell, getUserSubscription } from './firebase/firestore';
-import { runCell, runCells, formatOutput, pollJobStatus, cancelPolling } from './services/cellExecution';
+import { runCell, runCells, formatOutput, pollJobStatus, cancelPolling, areAllDependenciesComplete } from './services/cellExecution';
 import { parseDependencies, findDependentCells } from './utils/dependencies';
 import { getModelType } from './api';
 import Canvas from './components/Canvas';
@@ -74,6 +74,7 @@ function App() {
   const isProcessingAutoRunRef = useRef(false);
   // Track polling timeouts to allow cancellation
   const pollingTimeoutsRef = useRef({});
+  const agentHandoffSeenRef = useRef(new Set());
 
   // Initialize auth state
   useEffect(() => {
@@ -1056,12 +1057,16 @@ function App() {
     console.log('🛑 Stopped cells:', Array.from(cellsToStop));
   };
 
-  const handleRunCell = async (cellId) => {
+  const handleRunCell = async (cellId, fromAgentHandoff = false) => {
     if (!user || !currentProjectId || !activeSheet) return;
     if (runningCells.has(cellId)) return;
 
     const cell = cells[cellId];
     if (!cell || !cell.prompt) return;
+
+    if (!fromAgentHandoff) {
+      agentHandoffSeenRef.current = new Set();
+    }
 
     setRunningCells(prev => {
       const next = new Set(prev);
@@ -1084,6 +1089,32 @@ function App() {
         currentSheet: { ...activeSheet, cells },
         getLatestCells: () => cellsRef.current, // Provide function to get latest cell state
         runningCellsSet: runningCellsRef.current, // Provide Set of currently running cells
+        manualConnections: connections,
+        onHandoffDownstream: async (targetIds) => {
+          for (const tid of targetIds) {
+            if (agentHandoffSeenRef.current.has(tid)) continue;
+            const c = cellsRef.current[tid];
+            if (!c?.prompt?.trim() || !c.autoRun) continue;
+            if (runningCellsRef.current.has(tid)) continue;
+            agentHandoffSeenRef.current.add(tid);
+            const currentCells = cellsRef.current;
+            const allSheets = sheets.map((s) => ({
+              ...s,
+              cells: s.id === activeSheet.id ? currentCells : {}
+            }));
+            const currentSheetWithCells = { ...activeSheet, cells: currentCells };
+            const ok = await areAllDependenciesComplete(
+              c,
+              allSheets,
+              currentSheetWithCells,
+              () => cellsRef.current,
+              runningCellsRef.current,
+              user.uid,
+              currentProjectId
+            );
+            if (ok) await handleRunCell(tid, true);
+          }
+        },
         onProgress: ({ status, cellId: progressCellId, output, error, updatedCell, message }) => {
           if (status === 'complete' && output) {
             // Pass the full updatedCell (including generations) to ensure dependency checker sees completed status
