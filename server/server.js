@@ -39,7 +39,7 @@ const admin = require('firebase-admin');
  */
 function normalizeApiKeyString(raw) {
   if (raw == null) return null;
-  let s = String(raw).trim();
+  let s = String(raw).trim().replace(/^\uFEFF/, '');
   if (!s) return null;
   if (/^bearer\s+/i.test(s)) {
     s = s.replace(/^bearer\s+/i, '').trim();
@@ -965,6 +965,8 @@ async function makeAPIRequest(provider, endpoint, data = null, apiKey = null) {
       // Gemini uses API key as query parameter, not header
       url.searchParams.set('key', finalApiKey);
       delete options.headers['Authorization'];
+      // Path was built before ?key= was added — must refresh or requests go out with no key (401/403).
+      options.path = url.pathname + url.search;
     } else {
       // OpenAI uses Bearer token
       options.headers['Authorization'] = `Bearer ${finalApiKey}`;
@@ -2998,7 +3000,8 @@ window.storage = storage;`;
             errorMessage = 'Rate limit exceeded. Please try again later.';
             statusCode = 429;
           } else if (err.message.includes('authentication') || err.message.includes('401')) {
-            errorMessage = 'Authentication failed. Please check your API keys.';
+            errorMessage =
+              'Authentication failed. For OpenAI, add your key under Profile or set Railway OPENAI_API_KEY. For Gemini, add Profile → API providers or GEMINI_API_KEY — and save after pasting.';
             statusCode = 401;
           } else if (err.message.includes('not found') || err.message.includes('404')) {
             errorMessage = err.message; // Use the specific error message
@@ -3011,7 +3014,12 @@ window.storage = storage;`;
           let upstreamHint;
           if (statusCode === 401 || statusCode === 429) {
             upstreamHint = err.message?.substring(0, 600);
-          } else if (err.message?.includes('API Error') || err.message?.includes('HTTP ')) {
+          } else if (
+            err.message?.includes('API Error') ||
+            err.message?.includes('HTTP ') ||
+            err.message?.includes('Incorrect API') ||
+            err.message?.includes('invalid_api_key')
+          ) {
             upstreamHint = err.message.substring(0, 400);
           } else if (process.env.NODE_ENV === 'development') {
             upstreamHint = err.message;
