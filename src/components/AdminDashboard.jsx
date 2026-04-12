@@ -3,7 +3,7 @@ import {
   Shield, Users, FolderOpen, Brain, Crown, CreditCard, 
   BarChart3, Settings, LogOut, Plus, Edit, Trash2, 
   RefreshCw, Search, X, Check, AlertCircle, Coins, Sparkles,
-  ChevronLeft, ChevronRight, Key, Server, TestTube
+  ChevronLeft, ChevronRight, Key, Server, TestTube, Menu
 } from 'lucide-react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, 
@@ -33,6 +33,7 @@ const AdminDashboard = ({ user, onBack }) => {
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeSection, setActiveSection] = useState('dashboard');
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [adminData, setAdminData] = useState({
     users: [],
     projects: [],
@@ -116,6 +117,20 @@ const AdminDashboard = ({ user, onBack }) => {
       loadDashboardData();
     }
   }, [isAdmin]);
+
+  useEffect(() => {
+    if (!mobileSidebarOpen) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') setMobileSidebarOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [mobileSidebarOpen]);
 
   const checkAdminAccess = async () => {
     try {
@@ -1424,18 +1439,42 @@ const AdminDashboard = ({ user, onBack }) => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex">
+    <div className="relative flex min-h-screen bg-gray-50 dark:bg-gray-900">
+      {mobileSidebarOpen && (
+        <button
+          type="button"
+          aria-label="Close menu"
+          className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm lg:hidden"
+          onClick={() => setMobileSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
-      <div className="w-64 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 fixed h-screen overflow-y-auto">
-        <div className="p-6 border-b border-gray-200 dark:border-gray-700">
-          <div className="flex items-center gap-2 mb-2">
-            <Shield className="h-6 w-6 text-green-600" />
-            <h1 className="text-xl font-bold text-gray-900 dark:text-white">Admin Panel</h1>
+      <aside
+        id="admin-mobile-nav"
+        className={`fixed inset-y-0 left-0 z-50 flex h-screen w-64 max-w-[min(16rem,88vw)] flex-col overflow-y-auto border-r border-gray-200 bg-white transition-transform duration-200 ease-out dark:border-gray-700 dark:bg-gray-800 lg:translate-x-0 ${
+          mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+        }`}
+      >
+        <div className="border-b border-gray-200 p-4 dark:border-gray-700 sm:p-6">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <Shield className="h-6 w-6 shrink-0 text-green-600" />
+              <h1 className="truncate text-lg font-bold text-gray-900 dark:text-white sm:text-xl">Admin Panel</h1>
+            </div>
+            <button
+              type="button"
+              className="rounded-lg p-2 text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700 lg:hidden"
+              onClick={() => setMobileSidebarOpen(false)}
+              aria-label="Close menu"
+            >
+              <X className="h-5 w-5" />
+            </button>
           </div>
           <p className="text-sm text-gray-500 dark:text-gray-400">Cellulai Management</p>
         </div>
-        
-        <nav className="p-4 space-y-1">
+
+        <nav className="space-y-1 p-4">
           {[
             { id: 'dashboard', icon: BarChart3, label: 'Dashboard' },
             { id: 'users', icon: Users, label: 'Users' },
@@ -1447,42 +1486,58 @@ const AdminDashboard = ({ user, onBack }) => {
             { id: 'payments', icon: CreditCard, label: 'Payments' },
             { id: 'analytics', icon: BarChart3, label: 'Analytics' },
             { id: 'settings', icon: Settings, label: 'Settings' }
-          ].map(section => {
+          ].map((section) => {
             const Icon = section.icon;
             return (
               <button
                 key={section.id}
-                onClick={() => setActiveSection(section.id)}
-                className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg transition-colors ${
+                type="button"
+                onClick={() => {
+                  setActiveSection(section.id);
+                  setMobileSidebarOpen(false);
+                }}
+                className={`flex w-full min-h-[44px] items-center gap-3 rounded-lg px-4 py-2.5 transition-colors lg:min-h-0 lg:py-2 ${
                   activeSection === section.id
-                    ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
-                    : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+                    ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400'
+                    : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700'
                 }`}
               >
-                <Icon className="h-5 w-5" />
-                <span>{section.label}</span>
+                <Icon className="h-5 w-5 shrink-0" />
+                <span className="text-left">{section.label}</span>
               </button>
             );
           })}
-          
+
           <button
+            type="button"
             onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-2 rounded-lg text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors mt-4"
+            className="mt-4 flex w-full min-h-[44px] items-center gap-3 rounded-lg px-4 py-2.5 text-red-600 transition-colors hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20 lg:min-h-0 lg:py-2"
           >
-            <LogOut className="h-5 w-5" />
+            <LogOut className="h-5 w-5 shrink-0" />
             <span>Logout</span>
           </button>
         </nav>
-      </div>
+      </aside>
 
       {/* Main Content */}
-      <div className="flex-1 ml-64">
-        <div className="p-6">
+      <div className="min-w-0 flex-1 lg:ml-64">
+        <div className="p-4 sm:p-6">
           {/* Header */}
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
+          <div className="mb-6 rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800 sm:p-6">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-start gap-3">
+                <button
+                  type="button"
+                  className="mt-0.5 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700 lg:hidden"
+                  onClick={() => setMobileSidebarOpen(true)}
+                  aria-controls="admin-mobile-nav"
+                  aria-expanded={mobileSidebarOpen}
+                  aria-label="Open navigation menu"
+                >
+                  <Menu className="h-5 w-5" />
+                </button>
+                <div className="min-w-0">
+                <h2 className="text-xl font-bold text-gray-900 dark:text-white sm:text-2xl">
                   {activeSection === 'dashboard' && 'Dashboard'}
                   {activeSection === 'users' && 'User Management'}
                   {activeSection === 'projects' && 'Project Management'}
@@ -1494,13 +1549,15 @@ const AdminDashboard = ({ user, onBack }) => {
                   {activeSection === 'analytics' && 'Analytics'}
                   {activeSection === 'settings' && 'System Settings'}
                 </h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                   Welcome, {user?.email}
                 </p>
+                </div>
               </div>
               <button
+                type="button"
                 onClick={loadDashboardData}
-                className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+                className="flex w-full shrink-0 items-center justify-center gap-2 rounded-lg bg-gray-100 px-4 py-2.5 text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600 sm:w-auto"
               >
                 <RefreshCw className="h-4 w-4" />
                 <span>Refresh</span>

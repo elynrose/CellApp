@@ -133,7 +133,7 @@ const ProjectsPage = () => {
   return (
     <div className="h-screen flex flex-col mesh-gradient text-white font-sans overflow-hidden">
       {/* Header */}
-      <div className="h-16 flex items-center px-6 justify-between glass-panel z-50 relative">
+      <div className="flex h-16 shrink-0 items-center justify-between gap-3 px-4 sm:px-6 glass-panel z-50 relative">
         <div className="flex items-center gap-4">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-500 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
             <Box size={24} strokeWidth={2.5} />
@@ -146,19 +146,21 @@ const ProjectsPage = () => {
           </div>
         </div>
         <button
+          type="button"
           onClick={() => navigate('/')}
-          className="px-4 py-2 text-gray-300 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+          className="shrink-0 rounded-lg px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-white/10 hover:text-white sm:px-4 sm:text-base"
         >
-          Back to Workspace
+          <span className="sm:hidden">Back</span>
+          <span className="hidden sm:inline">Back to Workspace</span>
         </button>
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-y-auto p-6">
-        <div className="max-w-7xl mx-auto">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+        <div className="mx-auto max-w-7xl">
           {/* Search and Create */}
-          <div className="mb-6 flex items-center gap-4">
-            <div className="relative flex-1 max-w-md">
+          <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+            <div className="relative max-w-md flex-1">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
               <input
                 type="text"
@@ -169,12 +171,13 @@ const ProjectsPage = () => {
               />
             </div>
             <button
+              type="button"
               onClick={() => {
                 setProjectName('');
                 setEditingProject(null);
                 setShowCreateModal(true);
               }}
-              className="px-5 py-2 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white rounded-lg text-sm font-semibold transition-all shadow-lg shadow-blue-900/20 flex items-center gap-2"
+              className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-900/20 transition-all hover:bg-blue-500 active:bg-blue-700 sm:min-h-0 sm:w-auto"
             >
               <Plus size={16} />
               New Project

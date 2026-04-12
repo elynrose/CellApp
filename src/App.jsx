@@ -8,7 +8,7 @@ import { runCell, pollJobStatus, cancelPolling } from './services/cellExecution'
 import { parseDependencies, findDependentCells } from './utils/dependencies';
 import { getModelType } from './api';
 import Canvas from './components/Canvas';
-import { Plus, Box, Grid, Trash2, Play, LogOut, User, Shield, Crown, X, AlertCircle, Sparkles, Check, Edit2, GripVertical, ChevronDown, FolderOpen, Copy, FileText, Download, Workflow } from 'lucide-react';
+import { Plus, Box, Grid, Trash2, Play, LogOut, User, Shield, Crown, X, AlertCircle, Sparkles, Check, Edit2, GripVertical, ChevronDown, FolderOpen, Copy, FileText, Download, Workflow, Menu } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { signInWithGoogle, signOutUser, isCurrentUserAdmin } from './firebase/auth';
 import AdminDashboard from './components/AdminDashboard';
@@ -65,6 +65,7 @@ function App() {
   const [userCredits, setUserCredits] = useState(null);
   const [notification, setNotification] = useState(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [showOrchestratorModal, setShowOrchestratorModal] = useState(false);
   const [orchestratorPrompt, setOrchestratorPrompt] = useState('');
@@ -96,6 +97,20 @@ function App() {
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
   }, [showUserMenu]);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') setMobileNavOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [mobileNavOpen]);
   
   // Interval timers for autorun cells
   const intervalTimersRef = useRef({});
@@ -2287,24 +2302,148 @@ function App() {
     );
   }
 
+  const closeMobileNav = () => setMobileNavOpen(false);
+
   return (
     <div className="h-screen flex flex-col mesh-gradient text-white font-sans overflow-hidden">
-      {/* Toolbar / Header */}
-      <div className="h-16 flex items-center px-6 justify-between glass-panel z-50 relative pointer-events-auto">
-        <div className="flex items-center gap-4">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-500 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
-            <Box size={24} strokeWidth={2.5} />
-          </div>
-          <div className="flex flex-col">
-            <h1 className="text-xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-300">
-              Draftai
-            </h1>
-            <span className="text-[10px] text-gray-400 font-medium tracking-wider uppercase">Beta v2.0</span>
-          </div>
+      {/* Mobile nav backdrop */}
+      {mobileNavOpen && (
+        <button
+          type="button"
+          aria-label="Close menu"
+          className="fixed inset-0 z-[55] bg-black/50 backdrop-blur-[2px] lg:hidden"
+          onClick={closeMobileNav}
+        />
+      )}
+
+      {/* Mobile slide-out menu */}
+      <aside
+        id="mobile-app-nav"
+        className={`fixed inset-y-0 left-0 z-[60] flex w-[min(20rem,88vw)] max-w-full flex-col border-r border-white/10 bg-gray-950/95 shadow-2xl backdrop-blur-xl transition-transform duration-200 ease-out lg:hidden ${
+          mobileNavOpen ? 'translate-x-0' : '-translate-x-full pointer-events-none'
+        }`}
+        aria-hidden={!mobileNavOpen}
+      >
+        <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+          <span className="text-sm font-semibold tracking-wide text-white">Menu</span>
+          <button
+            type="button"
+            onClick={closeMobileNav}
+            className="rounded-lg p-2 text-gray-400 hover:bg-white/10 hover:text-white"
+            aria-label="Close menu"
+          >
+            <X size={20} />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto overscroll-contain px-3 py-4 space-y-3">
+          {connectingSource && (
+            <div className="rounded-lg border border-blue-500/30 bg-blue-500/20 px-3 py-2.5 text-xs font-medium text-blue-100 animate-pulse">
+              <span className="mr-2 inline-block h-2 w-2 rounded-full bg-blue-400 align-middle" />
+              Select target to connect
+            </div>
+          )}
+          {userCredits && (
+            <div className="flex items-center gap-2 rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-2.5">
+              <Sparkles size={16} className="shrink-0 text-blue-400" />
+              <span className="text-sm font-semibold text-blue-300">
+                {userCredits.credits?.current || 0} credits
+              </span>
+            </div>
+          )}
           {user && currentProjectId && (
             <button
+              type="button"
+              onClick={() => {
+                navigate('/projects');
+                closeMobileNav();
+              }}
+              className="flex min-h-[44px] w-full items-center gap-3 rounded-lg border border-white/10 bg-white/5 px-3 py-2.5 text-left text-sm font-medium text-gray-200 hover:bg-white/10"
+            >
+              <FolderOpen size={18} />
+              Projects
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              addCard();
+              closeMobileNav();
+            }}
+            className="flex min-h-[44px] w-full items-center gap-3 rounded-lg bg-blue-600 px-3 py-2.5 text-left text-sm font-semibold text-white shadow-lg shadow-blue-900/20 hover:bg-blue-500"
+          >
+            <Plus size={18} />
+            Add Card
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              handleDownloadSheet();
+              closeMobileNav();
+            }}
+            disabled={!activeSheet || cellsArray.length === 0}
+            className="flex min-h-[44px] w-full items-center gap-3 rounded-lg bg-purple-600 px-3 py-2.5 text-left text-sm font-semibold text-white shadow-lg shadow-purple-900/20 hover:bg-purple-500 disabled:cursor-not-allowed disabled:bg-gray-600"
+          >
+            <FileText size={18} />
+            Download Sheet
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setShowOrchestratorModal(true);
+              closeMobileNav();
+            }}
+            className="flex min-h-[44px] w-full items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-700/90 px-3 py-2.5 text-left text-sm font-semibold text-white hover:bg-amber-600"
+          >
+            <Workflow size={18} />
+            Orchestrator
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setShowTemplates(true);
+              closeMobileNav();
+            }}
+            className="flex min-h-[44px] w-full items-center gap-3 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 px-3 py-2.5 text-left text-sm font-semibold text-white hover:from-purple-500 hover:to-pink-500"
+          >
+            <Sparkles size={18} />
+            Templates
+          </button>
+        </div>
+      </aside>
+
+      {/* Toolbar / Header */}
+      <div className="relative z-50 flex h-14 shrink-0 items-center justify-between gap-2 px-3 sm:h-16 sm:px-6 glass-panel pointer-events-auto sm:gap-4">
+        <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-4">
+          <button
+            type="button"
+            onClick={() => setMobileNavOpen((o) => !o)}
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-gray-200 hover:bg-white/10 lg:hidden"
+            aria-expanded={mobileNavOpen}
+            aria-controls="mobile-app-nav"
+            aria-label={mobileNavOpen ? 'Close navigation menu' : 'Open navigation menu'}
+          >
+            <Menu size={22} strokeWidth={2} />
+          </button>
+          <div className="flex min-w-0 items-center gap-2 sm:gap-4">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-blue-500 to-purple-600 text-white shadow-lg shadow-blue-500/20 sm:h-10 sm:w-10">
+              <Box size={22} strokeWidth={2.5} className="sm:hidden" />
+              <Box size={24} strokeWidth={2.5} className="hidden sm:block" />
+            </div>
+            <div className="min-w-0 flex flex-col">
+              <h1 className="truncate text-base font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-300 sm:text-xl">
+                Draftai
+              </h1>
+              <span className="hidden text-[10px] font-medium uppercase tracking-wider text-gray-400 sm:block">
+                Beta v2.0
+              </span>
+            </div>
+          </div>
+
+          {user && currentProjectId && (
+            <button
+              type="button"
               onClick={() => navigate('/projects')}
-              className="ml-4 px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-sm font-medium text-gray-300 hover:text-white transition-all flex items-center gap-2"
+              className="ml-1 hidden items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-gray-300 transition-all hover:bg-white/10 hover:text-white lg:flex"
               title="Manage projects"
             >
               <FolderOpen size={16} />
@@ -2313,123 +2452,135 @@ function App() {
           )}
 
           {connectingSource && (
-            <div className="ml-4 px-3 py-1 bg-blue-500/20 border border-blue-500/30 rounded-full flex items-center gap-2 animate-pulse">
-              <span className="w-2 h-2 bg-blue-400 rounded-full"></span>
-              <span className="text-xs text-blue-200 font-medium">Select target to connect</span>
+            <div className="ml-2 hidden max-w-[14rem] items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/20 px-3 py-1 animate-pulse lg:flex">
+              <span className="h-2 w-2 shrink-0 rounded-full bg-blue-400" />
+              <span className="truncate text-xs font-medium text-blue-200">Select target to connect</span>
             </div>
           )}
         </div>
 
-        <div className="flex gap-3 items-center">
-          {/* Credit Balance Display */}
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           {userCredits && (
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+            <div className="hidden items-center gap-2 rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-1.5 lg:flex">
               <Sparkles size={14} className="text-blue-400" />
               <span className="text-sm font-semibold text-blue-300">
                 {userCredits.credits?.current || 0} Credits
               </span>
             </div>
           )}
-          <button
-            onClick={() => addCard()}
-            className="px-5 py-2 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white rounded-lg text-sm font-semibold transition-all shadow-lg shadow-blue-900/20 flex items-center gap-2"
-          >
-            <Plus size={16} />
-            Add Card
-          </button>
-          <button
-            onClick={() => handleDownloadSheet()}
-            disabled={!activeSheet || cellsArray.length === 0}
-            className="px-5 py-2 bg-purple-600 hover:bg-purple-500 active:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition-all shadow-lg shadow-purple-900/20 flex items-center gap-2"
-            title="Download sheet as PDF"
-          >
-            <FileText size={16} />
-            Download Sheet
-          </button>
-          <button
-            onClick={() => setShowOrchestratorModal(true)}
-            className="px-5 py-2 bg-amber-700/90 hover:bg-amber-600 text-white rounded-lg text-sm font-semibold transition-all shadow-lg flex items-center gap-2 border border-amber-500/30"
-            title="Orchestrator: describe your task; we pick or create a template"
-          >
-            <Workflow size={16} />
-            Orchestrator
-          </button>
-          <button
-            onClick={() => setShowTemplates(true)}
-            className="px-5 py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 active:from-purple-700 active:to-pink-700 text-white rounded-lg text-sm font-semibold transition-all shadow-lg shadow-purple-900/20 flex items-center gap-2"
-            title="Use a template"
-          >
-            <Sparkles size={16} />
-            Templates
-          </button>
+          {userCredits && (
+            <div className="flex items-center gap-1.5 rounded-lg border border-blue-500/20 bg-blue-500/10 px-2 py-1.5 lg:hidden" title="Credits">
+              <Sparkles size={14} className="text-blue-400" />
+              <span className="text-xs font-semibold tabular-nums text-blue-300">{userCredits.credits?.current || 0}</span>
+            </div>
+          )}
+          <div className="hidden items-center gap-2 lg:flex xl:gap-3">
+            <button
+              type="button"
+              onClick={() => addCard()}
+              className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-blue-900/20 transition-all hover:bg-blue-500 active:bg-blue-700"
+            >
+              <Plus size={16} />
+              Add Card
+            </button>
+            <button
+              type="button"
+              onClick={() => handleDownloadSheet()}
+              disabled={!activeSheet || cellsArray.length === 0}
+              className="flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-purple-900/20 transition-all hover:bg-purple-500 active:bg-purple-700 disabled:cursor-not-allowed disabled:bg-gray-600"
+              title="Download sheet as PDF"
+            >
+              <FileText size={16} />
+              Download Sheet
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowOrchestratorModal(true)}
+              className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-700/90 px-4 py-2 text-sm font-semibold text-white shadow-lg hover:bg-amber-600"
+              title="Orchestrator: describe your task; we pick or create a template"
+            >
+              <Workflow size={16} />
+              Orchestrator
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowTemplates(true)}
+              className="flex items-center gap-2 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-purple-900/20 transition-all hover:from-purple-500 hover:to-pink-500 active:from-purple-700 active:to-pink-700"
+              title="Use a template"
+            >
+              <Sparkles size={16} />
+              Templates
+            </button>
+          </div>
           {/* User Menu */}
           {user && (
             <div className="relative user-menu-container">
               <button
+                type="button"
                 onClick={() => setShowUserMenu(!showUserMenu)}
-                className="flex items-center gap-2 px-3 py-1.5 glass-button rounded-lg hover:bg-white/10 transition-colors"
+                className="flex items-center gap-2 rounded-lg px-2 py-1.5 glass-button hover:bg-white/10 transition-colors sm:px-3"
                 title="User menu"
               >
                 {user.photoURL ? (
-                  <img 
-                    src={user.photoURL} 
-                    alt={user.displayName || user.email || 'User'} 
-                    className="w-6 h-6 rounded-full"
+                  <img
+                    src={user.photoURL}
+                    alt={user.displayName || user.email || 'User'}
+                    className="h-8 w-8 rounded-full md:h-6 md:w-6"
                   />
                 ) : (
-                  <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-blue-500 to-purple-600 flex items-center justify-center text-white text-xs font-semibold">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-tr from-blue-500 to-purple-600 text-xs font-semibold text-white md:h-6 md:w-6">
                     {(user.displayName || user.email || 'U').charAt(0).toUpperCase()}
                   </div>
                 )}
-                <span className="text-sm font-medium text-white hidden sm:block">
+                <span className="hidden max-w-[8rem] truncate text-sm font-medium text-white md:block">
                   {user.displayName || user.email || 'User'}
                 </span>
-                <ChevronDown size={14} className="text-gray-400 hidden sm:block" />
-          </button>
-              
+                <ChevronDown size={14} className="hidden text-gray-400 md:block" />
+              </button>
+
               {/* User Menu Dropdown */}
               {showUserMenu && (
-                <div className="absolute right-0 top-full mt-2 w-56 glass-panel rounded-lg shadow-xl border border-white/10 overflow-hidden z-50">
-                  <div className="p-3 border-b border-white/10">
+                <div className="absolute right-0 top-full z-[70] mt-2 w-56 max-w-[calc(100vw-1rem)] glass-panel rounded-lg border border-white/10 shadow-xl overflow-hidden">
+                  <div className="border-b border-white/10 p-3">
                     <div className="flex items-center gap-3">
                       {user.photoURL ? (
-                        <img 
-                          src={user.photoURL} 
-                          alt={user.displayName || user.email || 'User'} 
-                          className="w-10 h-10 rounded-full"
+                        <img
+                          src={user.photoURL}
+                          alt={user.displayName || user.email || 'User'}
+                          className="h-10 w-10 rounded-full"
                         />
                       ) : (
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-blue-500 to-purple-600 flex items-center justify-center text-white font-semibold">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-tr from-blue-500 to-purple-600 font-semibold text-white">
                           {(user.displayName || user.email || 'U').charAt(0).toUpperCase()}
                         </div>
                       )}
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-semibold text-white truncate">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-semibold text-white">
                           {user.displayName || 'No Name'}
                         </div>
-                        <div className="text-xs text-gray-400 truncate">
-                          {user.email}
-                        </div>
+                        <div className="truncate text-xs text-gray-400">{user.email}</div>
                       </div>
                     </div>
                   </div>
                   <div className="p-1">
                     <button
+                      type="button"
                       onClick={() => {
                         setShowProfile(true);
                         setShowUserMenu(false);
                       }}
-                      className="w-full flex items-center justify-start gap-2 px-3 py-2 text-sm text-left text-gray-300 hover:bg-white/10 rounded-lg transition-colors"
+                      className="flex w-full items-center justify-start gap-2 rounded-lg px-3 py-2 text-left text-sm text-gray-300 hover:bg-white/10"
                     >
                       <User size={16} />
                       <span>Profile</span>
                     </button>
                     <button
+                      type="button"
                       onClick={() => {
                         setShowSubscription(true);
                         setShowUserMenu(false);
                       }}
-                      className="w-full flex items-center justify-start gap-2 px-3 py-2 text-sm text-left text-gray-300 hover:bg-white/10 rounded-lg transition-colors"
+                      className="flex w-full items-center justify-start gap-2 rounded-lg px-3 py-2 text-left text-sm text-gray-300 hover:bg-white/10"
                     >
                       <Crown size={16} />
                       <span>Subscriptions</span>
@@ -2441,22 +2592,24 @@ function App() {
                     </button>
                     {isAdmin && (
                       <button
+                        type="button"
                         onClick={() => {
                           setShowAdmin(true);
                           setShowUserMenu(false);
                         }}
-                        className="w-full flex items-center justify-start gap-2 px-3 py-2 text-sm text-left text-gray-300 hover:bg-white/10 rounded-lg transition-colors"
+                        className="flex w-full items-center justify-start gap-2 rounded-lg px-3 py-2 text-left text-sm text-gray-300 hover:bg-white/10"
                       >
                         <Shield size={16} />
                         <span>Admin Dashboard</span>
                       </button>
                     )}
                     <button
+                      type="button"
                       onClick={async () => {
                         setShowUserMenu(false);
                         await signOutUser();
                       }}
-                      className="w-full flex items-center justify-start gap-2 px-3 py-2 text-sm text-left text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
+                      className="flex w-full items-center justify-start gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-400 hover:bg-red-500/10"
                     >
                       <LogOut size={16} />
                       <span>Sign Out</span>
@@ -2497,15 +2650,16 @@ function App() {
       </div>
 
       {/* Footer / Tabs */}
-      <div className="h-12 glass-panel border-t-0 border-b border-l-0 border-r-0 flex items-center px-4 overflow-x-auto z-50 relative gap-2">
+      <div className="flex h-14 min-h-[3rem] shrink-0 items-center gap-2 overflow-x-auto overscroll-x-contain px-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 glass-panel border-t-0 border-b border-l-0 border-r-0 z-50 relative touch-pan-x sm:h-12 sm:px-4 sm:py-0">
         <button
+          type="button"
           onClick={handleCreateSheet}
-          className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-white/10 hover:text-white"
           title="Add Sheet"
         >
           <Plus size={18} />
         </button>
-        <div className="h-6 w-px bg-white/10 mx-2"></div>
+        <div className="mx-1 h-6 w-px shrink-0 bg-white/10 sm:mx-2"></div>
         {sheets.map((sheet) => (
           <div
             key={sheet.id}
@@ -2543,7 +2697,7 @@ function App() {
               }
             }}
             className={`
-              px-4 py-1.5 rounded-md text-sm cursor-pointer flex items-center gap-2 transition-all border
+              min-h-[44px] shrink-0 cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm transition-all sm:min-h-0 sm:px-4 sm:py-1.5 flex
               ${activeSheet?.id === sheet.id
                 ? 'bg-white/10 text-white border-white/10 shadow-sm'
                 : 'border-transparent text-gray-400 hover:text-gray-200 hover:bg-white/5'}
@@ -2614,7 +2768,7 @@ function App() {
 
       {/* Notification Toast */}
       {notification && (
-        <div className="fixed top-4 right-4 z-50 max-w-md transition-all duration-300 ease-in-out">
+        <div className="fixed left-4 right-4 top-4 z-50 mx-auto max-w-md transition-all duration-300 ease-in-out sm:left-auto sm:right-4 sm:mx-0">
           <div className={`rounded-lg shadow-xl border p-4 backdrop-blur-sm ${
             notification.type === 'error' 
               ? 'bg-red-900/95 border-red-700 text-white' 
