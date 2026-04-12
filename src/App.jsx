@@ -171,43 +171,46 @@ function App() {
   const loadUserCredits = async (userId) => {
     try {
       const result = await getUserSubscription(userId);
-      if (result.success) {
-        const subscriptionData = result.data;
-        
-        // Check if credits need to be reset
-        const nextReset = subscriptionData?.credits?.nextReset;
-        if (nextReset) {
-          let nextResetDate;
-          if (nextReset.toDate) {
-            nextResetDate = nextReset.toDate();
-          } else if (nextReset.seconds) {
-            nextResetDate = new Date(nextReset.seconds * 1000);
-          } else {
-            nextResetDate = new Date(nextReset);
-          }
-          
-          const now = new Date();
-          if (now >= nextResetDate) {
-            // Credits need reset - this will be handled by cellExecution when user tries to generate
-            // But we can trigger it here for immediate UI update
+      if (!result.success) {
+        return;
+      }
+      const subscriptionData = result.data;
+
+      // Monthly reset uses restricted `credits` fields — non-admins cannot write them (firestore.rules).
+      // If this throws, we must still show balances loaded above (e.g. admin-granted credits in Console).
+      const nextReset = subscriptionData?.credits?.nextReset;
+      if (nextReset) {
+        let nextResetDate;
+        if (nextReset.toDate) {
+          nextResetDate = nextReset.toDate();
+        } else if (nextReset.seconds) {
+          nextResetDate = new Date(nextReset.seconds * 1000);
+        } else {
+          nextResetDate = new Date(nextReset);
+        }
+
+        const now = new Date();
+        if (now >= nextResetDate) {
+          try {
             const { getPlanById } = await import('./services/subscriptions');
             const planId = subscriptionData.subscription || 'free';
             const plan = await getPlanById(planId);
             const { resetMonthlyCredits } = await import('./firebase/firestore');
             await resetMonthlyCredits(userId, planId, plan.monthlyCredits);
-            
-            // Reload after reset
             const updatedResult = await getUserSubscription(userId);
             if (updatedResult.success) {
               setUserCredits(updatedResult.data);
               return;
             }
+          } catch {
+            // Ignore: server-side or rules block client reset; cellExecution may handle later.
           }
         }
-        
-        setUserCredits(subscriptionData);
       }
-    } catch (error) {
+
+      setUserCredits(subscriptionData);
+    } catch {
+      // ignore
     }
   };
 

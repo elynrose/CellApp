@@ -3,6 +3,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   setDoc,
   updateDoc,
@@ -880,13 +881,15 @@ export async function deductCredits(userId, amount) {
  */
 export async function resetMonthlyCredits(userId, planId, monthlyCredits) {
   try {
+    const allowance = Number(monthlyCredits);
+    const amount = Number.isFinite(allowance) && allowance > 0 ? allowance : 50;
     const now = new Date();
     const nextReset = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days from now
 
     // Use setDoc with merge to handle nested credits object
     await setDoc(doc(db, 'users', userId), {
-      'credits.current': monthlyCredits,
-      'credits.total': monthlyCredits,
+      'credits.current': amount,
+      'credits.total': amount,
       'credits.lastReset': now,
       'credits.nextReset': nextReset,
       updatedAt: serverTimestamp()
@@ -899,11 +902,38 @@ export async function resetMonthlyCredits(userId, planId, monthlyCredits) {
 }
 
 /**
+ * Normalize credits from Firestore. An empty map `{}` is truthy but has no `.current`, which
+ * would otherwise show as 0 in the UI even after manual edits used the wrong shape.
+ */
+export function normalizeUserCredits(raw) {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { current: 0, total: 0 };
+  }
+  const num = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  return {
+    current: num(raw.current),
+    total: num(raw.total),
+    lastReset: raw.lastReset,
+    nextReset: raw.nextReset
+  };
+}
+
+/**
  * Get user subscription info
  */
 export async function getUserSubscription(userId) {
   try {
-    const userDoc = await getDoc(doc(db, 'users', userId));
+    const ref = doc(db, 'users', userId);
+    // Prefer server so the UI is not stuck on a stale offline cache showing 0 credits.
+    let userDoc;
+    try {
+      userDoc = await getDocFromServer(ref);
+    } catch {
+      userDoc = await getDoc(ref);
+    }
     if (!userDoc.exists()) {
       return { success: false, error: 'User not found' };
     }
@@ -914,7 +944,7 @@ export async function getUserSubscription(userId) {
       data: {
         subscription: userData.subscription || 'free',
         subscriptionStatus: userData.subscriptionStatus || 'active',
-        credits: userData.credits || { current: 0, total: 0 },
+        credits: normalizeUserCredits(userData.credits),
         stripeCustomerId: userData.stripeCustomerId,
         stripeSubscriptionId: userData.stripeSubscriptionId
       }
