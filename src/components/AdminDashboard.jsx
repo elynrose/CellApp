@@ -20,10 +20,14 @@ import {
   getAllTemplates, createTemplate, updateTemplate, deleteTemplate,
   getSettingsDoc,
   clearSettingsField,
+  setSettingsDoc,
   getAdminConfig, setAdminConfig, clearAdminConfigField
 } from '../firebase/firestore';
 import { getSubscriptionPlans, getPlanById } from '../services/subscriptions';
 import { testProviderApiKey } from '../api';
+
+/** Shown when a key is already stored so the field is not empty after reload. */
+const KEY_MASK = '••••••••••••••••••••';
 
 const AdminDashboard = ({ user, onBack }) => {
   const [isAdmin, setIsAdmin] = useState(false);
@@ -662,8 +666,14 @@ const AdminDashboard = ({ user, onBack }) => {
   };
 
   const mergeKeyDoc = (adminRes, legacySettingsRes) => {
-    const a = adminRes.success && adminRes.data?.apiKey ? adminRes.data : null;
-    const s = legacySettingsRes.success && legacySettingsRes.data?.apiKey ? legacySettingsRes.data : null;
+    const a =
+      adminRes.success && adminRes.data && adminRes.data.apiKey
+        ? adminRes.data
+        : null;
+    const s =
+      legacySettingsRes.success && legacySettingsRes.data && legacySettingsRes.data.apiKey
+        ? legacySettingsRes.data
+        : null;
     return a || s || null;
   };
 
@@ -678,15 +688,17 @@ const AdminDashboard = ({ user, onBack }) => {
       ]);
       const openaiDoc = mergeKeyDoc(adminOpenai, settingsOpenai);
       const geminiDoc = mergeKeyDoc(adminGemini, settingsGemini);
+      const hasOpenAi = !!(openaiDoc && openaiDoc.apiKey);
+      const hasGemini = !!(geminiDoc && geminiDoc.apiKey);
       setSystemSettings((prev) => ({
         ...prev,
         loading: false,
-        openAiConfigured: !!openaiDoc?.apiKey,
-        geminiConfigured: !!geminiDoc?.apiKey,
+        openAiConfigured: hasOpenAi,
+        geminiConfigured: hasGemini,
         openAiUpdatedAt: openaiDoc?.updatedAt ?? null,
         geminiUpdatedAt: geminiDoc?.updatedAt ?? null,
-        openAiKeyInput: '',
-        geminiKeyInput: ''
+        openAiKeyInput: hasOpenAi ? KEY_MASK : '',
+        geminiKeyInput: hasGemini ? KEY_MASK : ''
       }));
     } catch {
       setSystemSettings((prev) => ({ ...prev, loading: false }));
@@ -701,42 +713,64 @@ const AdminDashboard = ({ user, onBack }) => {
   }, [isAdmin, activeSection]);
 
   const handleSaveOpenAiKey = async () => {
-    const key = systemSettings.openAiKeyInput.trim();
-    if (!key) {
-      showNotification('Paste an API key before saving.', 'error');
+    const raw = systemSettings.openAiKeyInput.trim();
+    if (!raw || raw === KEY_MASK) {
+      showNotification(
+        systemSettings.openAiConfigured
+          ? 'Paste a new API key to replace the one on file (or use Remove).'
+          : 'Paste an API key before saving.',
+        'error'
+      );
       return;
     }
-    const result = await setAdminConfig('openai', { apiKey: key });
-    if (result.success) {
-      showNotification('OpenAI API key saved.', 'success');
+    const [rAdmin, rSettings] = await Promise.all([
+      setAdminConfig('openai', { apiKey: raw }),
+      setSettingsDoc('openai', { apiKey: raw })
+    ]);
+    if (rAdmin.success && rSettings.success) {
+      showNotification('OpenAI API key saved to admin/openai and settings/openai.', 'success');
       setSystemSettings((prev) => ({
         ...prev,
-        openAiKeyInput: '',
+        openAiKeyInput: KEY_MASK,
         openAiConfigured: true
       }));
       await loadSystemSettings();
     } else {
-      showNotification(`Failed to save OpenAI key: ${result.error}`, 'error');
+      showNotification(
+        `Failed to save OpenAI key: ${rAdmin.error || rSettings.error || 'Unknown error'}`,
+        'error'
+      );
     }
   };
 
   const handleSaveGeminiKey = async () => {
-    const key = systemSettings.geminiKeyInput.trim();
-    if (!key) {
-      showNotification('Paste an API key before saving.', 'error');
+    const raw = systemSettings.geminiKeyInput.trim();
+    if (!raw || raw === KEY_MASK) {
+      showNotification(
+        systemSettings.geminiConfigured
+          ? 'Paste a new API key to replace the one on file (or use Remove).'
+          : 'Paste an API key before saving.',
+        'error'
+      );
       return;
     }
-    const result = await setAdminConfig('gemini', { apiKey: key });
-    if (result.success) {
-      showNotification('Gemini API key saved.', 'success');
+    const [rAdmin, rSettings] = await Promise.all([
+      setAdminConfig('gemini', { apiKey: raw }),
+      setSettingsDoc('gemini', { apiKey: raw })
+    ]);
+    if (rAdmin.success && rSettings.success) {
+      showNotification('Gemini API key saved to admin/gemini and settings/gemini.', 'success');
       setSystemSettings((prev) => ({
         ...prev,
-        geminiKeyInput: '',
+        geminiKeyInput: KEY_MASK,
         geminiConfigured: true
       }));
       await loadSystemSettings();
     } else {
-      showNotification(`Failed to save Gemini key: ${result.error}`, 'error');
+      showNotification(
+        `Failed to save Gemini key: ${rAdmin.error || rSettings.error || 'Unknown error'}`,
+        'error'
+      );
     }
   };
 
@@ -765,8 +799,8 @@ const AdminDashboard = ({ user, onBack }) => {
 
   const handleTestOpenAiKey = async () => {
     const key = systemSettings.openAiKeyInput.trim();
-    if (!key) {
-      showNotification('Paste a key in the field to test it.', 'error');
+    if (!key || key === KEY_MASK) {
+      showNotification('Paste a key in the field to test it (not the masked placeholder).', 'error');
       return;
     }
     setTestingProviderKey((t) => ({ ...t, openai: true }));
@@ -784,8 +818,8 @@ const AdminDashboard = ({ user, onBack }) => {
 
   const handleTestGeminiKey = async () => {
     const key = systemSettings.geminiKeyInput.trim();
-    if (!key) {
-      showNotification('Paste a key in the field to test it.', 'error');
+    if (!key || key === KEY_MASK) {
+      showNotification('Paste a key in the field to test it (not the masked placeholder).', 'error');
       return;
     }
     setTestingProviderKey((t) => ({ ...t, gemini: true }));
@@ -2831,16 +2865,19 @@ const AdminDashboard = ({ user, onBack }) => {
                 <div className="text-sm text-amber-900 dark:text-amber-100/90">
                   <p className="font-medium text-amber-950 dark:text-amber-50 mb-1">Server API keys</p>
                   <p className="text-amber-800 dark:text-amber-200/90">
-                    Saves to{' '}
+                    Saving writes both{' '}
                     <code className="px-1 py-0.5 rounded bg-amber-100/80 dark:bg-amber-900/50 font-mono text-xs">
                       admin/openai
                     </code>{' '}
-                    and{' '}
+                    /{' '}
                     <code className="px-1 py-0.5 rounded bg-amber-100/80 dark:bg-amber-900/50 font-mono text-xs">
                       admin/gemini
                     </code>{' '}
-                    (admin-only in Firestore rules). The server also checks legacy{' '}
-                    <code className="font-mono text-xs">settings/*</code> if present, then environment variables.
+                    and{' '}
+                    <code className="font-mono text-xs">settings/openai</code> /{' '}
+                    <code className="font-mono text-xs">settings/gemini</code> so the Node server (which reads{' '}
+                    <code className="font-mono text-xs">settings/*</code> first) always sees the key. Env vars are still
+                    a fallback when both are empty.
                   </p>
                 </div>
               </div>

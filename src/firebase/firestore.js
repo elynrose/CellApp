@@ -653,7 +653,8 @@ export async function getAdminConfig(configKey) {
     if (configDoc.exists()) {
       return { success: true, data: configDoc.data() };
     }
-    return { success: false, error: 'Config not found' };
+    // Missing doc is normal — merge with legacy settings/* in the UI.
+    return { success: true, data: null };
   } catch (error) {
     return { success: false, error: error.message };
   }

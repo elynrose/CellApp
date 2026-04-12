@@ -17,17 +17,27 @@ async function getAuthHeaders() {
 }
 
 /**
- * Get API base URL based on environment
+ * Backend origin for /api/* calls.
+ * - Vite dev (port 5173): same-origin relative '' so /api is proxied to Node (see vite.config.js).
+ * - Vite preview / prod build on localhost without proxy: use Railway or VITE_API_BASE_URL (POST /api on :4173 otherwise returns 405).
+ * - Deployed web app: Railway unless VITE_API_BASE_URL is set.
  */
 function getApiBaseUrl() {
-  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-    // Use relative URL in development to leverage Vite proxy
+  const fromEnv = import.meta.env.VITE_API_BASE_URL;
+  if (typeof fromEnv === 'string' && fromEnv.trim()) {
+    return fromEnv.replace(/\/+$/, '');
+  }
+  const host = typeof window !== 'undefined' ? window.location.hostname : '';
+  const port = typeof window !== 'undefined' ? window.location.port : '';
+
+  if (import.meta.env.DEV && (port === '5173' || port === '')) {
     return '';
+  }
+  if (host === 'localhost' || host === '127.0.0.1') {
+    return 'https://gpt-cells-app-production.up.railway.app';
   }
   return 'https://gpt-cells-app-production.up.railway.app';
 }
-
-const API_BASE_URL = getApiBaseUrl();
 
 /**
  * AI Generation - Call backend API for text/image/video/audio generation
@@ -118,7 +128,7 @@ export async function generateAI(
         const fixedJson = JSON.stringify(fixedBody);
         console.error(`   ✅ Fixed JSON: ${fixedJson}`);
         // Use the fixed JSON
-        const response = await fetch(`${API_BASE_URL}/api/llm`, {
+        const response = await fetch(`${getApiBaseUrl()}/api/llm`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
