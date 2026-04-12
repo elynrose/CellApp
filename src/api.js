@@ -229,6 +229,7 @@ export async function checkJobStatus(jobId) {
  */
 export async function testProviderApiKey(provider, apiKey, options = {}) {
   try {
+    const API_BASE_URL = getApiBaseUrl();
     const response = await fetch(`${API_BASE_URL}/api/test-api-key`, {
       method: 'POST',
       headers: {
@@ -259,6 +260,7 @@ export async function testProviderApiKey(provider, apiKey, options = {}) {
  */
 export async function getAvailableModels() {
   try {
+    const API_BASE_URL = getApiBaseUrl();
     const response = await fetch(`${API_BASE_URL}/api/models`, {
       headers: {
         ...(await getAuthHeaders()),
@@ -276,6 +278,7 @@ export async function getAvailableModels() {
  * Legacy SQLite endpoints (for backward compatibility during migration)
  */
 export const fetchSheets = async () => {
+    const API_BASE_URL = getApiBaseUrl();
     const response = await fetch(`${API_BASE_URL}/api/sheets`, {
       headers: {
         ...(await getAuthHeaders()),
@@ -286,6 +289,7 @@ export const fetchSheets = async () => {
 };
 
 export const fetchCells = async (sheetId) => {
+    const API_BASE_URL = getApiBaseUrl();
     const response = await fetch(`${API_BASE_URL}/api/sheets/${sheetId}/cells`, {
       headers: {
         ...(await getAuthHeaders()),
@@ -296,6 +300,7 @@ export const fetchCells = async (sheetId) => {
 };
 
 export const saveCell = async (sheetId, cellId, data) => {
+    const API_BASE_URL = getApiBaseUrl();
     const response = await fetch(`${API_BASE_URL}/api/save-cell`, {
         method: 'POST',
         headers: {
@@ -309,6 +314,7 @@ export const saveCell = async (sheetId, cellId, data) => {
 };
 
 export const createSheet = async (name) => {
+    const API_BASE_URL = getApiBaseUrl();
     const response = await fetch(`${API_BASE_URL}/api/sheets`, {
         method: 'POST',
         headers: { 
@@ -321,6 +327,7 @@ export const createSheet = async (name) => {
 };
 
 export const deleteSheet = async (id) => {
+    const API_BASE_URL = getApiBaseUrl();
     await fetch(`${API_BASE_URL}/api/sheets/${id}`, { 
       method: 'DELETE',
       headers: {
@@ -330,6 +337,7 @@ export const deleteSheet = async (id) => {
 };
 
 export const renameSheet = async (id, name) => {
+    const API_BASE_URL = getApiBaseUrl();
     await fetch(`${API_BASE_URL}/api/sheets/${id}`, {
         method: 'PUT',
         headers: { 
@@ -341,6 +349,7 @@ export const renameSheet = async (id, name) => {
 };
 
 export const fetchConnections = async (sheetId) => {
+    const API_BASE_URL = getApiBaseUrl();
     const response = await fetch(`${API_BASE_URL}/api/sheets/${sheetId}/connections`, {
       headers: {
         ...(await getAuthHeaders()),
@@ -351,6 +360,7 @@ export const fetchConnections = async (sheetId) => {
 };
 
 export const saveConnection = async (sheetId, sourceId, targetId) => {
+    const API_BASE_URL = getApiBaseUrl();
     const response = await fetch(`${API_BASE_URL}/api/connections`, {
         method: 'POST',
         headers: { 
@@ -364,6 +374,7 @@ export const saveConnection = async (sheetId, sourceId, targetId) => {
 };
 
 export const deleteConnection = async (sheetId, sourceId, targetId) => {
+    const API_BASE_URL = getApiBaseUrl();
     const response = await fetch(`${API_BASE_URL}/api/connections`, {
         method: 'POST',
         headers: { 
