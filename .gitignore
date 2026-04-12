@@ -26,6 +26,7 @@ dist-ssr
 # Secrets / local env files (never commit)
 .env
 .env.*
+!.env.example
 data.txt
 *.pem
 *firebase-adminsdk*.json
