@@ -12,7 +12,11 @@
     "server": "node server/server.js",
     "start": "node server/server.js",
     "build:server": "vite build && node scripts/sync-server-public.mjs",
-    "test:rules": "firebase emulators:exec --only firestore \"node ./tests/firestore.rules.test.mjs\""
+    "test:rules": "firebase emulators:exec --only firestore \"node ./tests/firestore.rules.test.mjs\"",
+    "firebase": "npx firebase-tools@13",
+    "firebase:login": "npx firebase-tools@13 login",
+    "firebase:setup": "node scripts/firebase-setup.mjs",
+    "firebase:deploy:rules": "npx firebase-tools@13 deploy --only firestore:rules,storage"
   },
   "engines": {
     "node": "20.x"
