@@ -28,7 +28,13 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Deploy Firestore and Storage rules
+      - name: Deploy Firestore rules
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-        run: npx --yes firebase-tools@13 deploy --only firestore:rules,storage --non-interactive
+        run: npx --yes firebase-tools@13 deploy --only firestore:rules --non-interactive
+
+      - name: Deploy Storage rules
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: npx --yes firebase-tools@13 deploy --only storage --non-interactive
+        continue-on-error: true

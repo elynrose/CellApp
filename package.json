@@ -16,7 +16,9 @@
     "firebase": "npx firebase-tools@13",
     "firebase:login": "npx firebase-tools@13 login",
     "firebase:setup": "node scripts/firebase-setup.mjs",
-    "firebase:deploy:rules": "npx firebase-tools@13 deploy --only firestore:rules,storage"
+    "firebase:deploy:rules": "npx firebase-tools@13 deploy --only firestore:rules",
+    "firebase:deploy:storage-rules": "npx firebase-tools@13 deploy --only storage",
+    "firebase:deploy:rules:all": "npx firebase-tools@13 deploy --only firestore:rules,storage"
   },
   "engines": {
     "node": "20.x"

@@ -211,7 +211,7 @@ console.log(`
 Next steps (manual):
 1. Firebase Console → Authentication → Sign-in method: enable Google (and Email/Password if you use it).
 2. Firebase Console → Storage → Get started (if you use uploads).
-3. Deploy rules:  npm run firebase:deploy:rules
+3. Deploy rules:  npm run firebase:deploy:rules (Firestore) and npm run firebase:deploy:storage-rules (Storage), or npm run firebase:deploy:rules:all if your account can enable both APIs
 4. Railway / server: set FIREBASE_PROJECT_ID=${pid} and FIREBASE_SERVICE_ACCOUNT_KEY (JSON) for Admin SDK.
 
 Default Hosting domain for auth: add authorized domains if you use a custom domain.
