@@ -13,6 +13,9 @@ const defaultProviderForm = () => ({
     grok: '',
     gemini: '',
     fal: '',
+    anthropic: '',
+    mistral: '',
+    deepseek: '',
     lmStudio: { baseUrl: 'http://127.0.0.1:1234', apiKey: '' },
     ollama: { baseUrl: 'http://127.0.0.1:11434' }
 });
@@ -39,6 +42,9 @@ const UserProfile = ({ user, onClose }) => {
         grok: false,
         gemini: false,
         fal: false,
+        anthropic: false,
+        mistral: false,
+        deepseek: false,
         lmStudioApi: false
     });
     const [showProviderKey, setShowProviderKey] = useState({});
@@ -75,6 +81,9 @@ const UserProfile = ({ user, onClose }) => {
                     grok: pa.grok ? KEY_PLACEHOLDER : '',
                     gemini: pa.gemini ? KEY_PLACEHOLDER : '',
                     fal: pa.fal ? KEY_PLACEHOLDER : '',
+                    anthropic: pa.anthropic ? KEY_PLACEHOLDER : '',
+                    mistral: pa.mistral ? KEY_PLACEHOLDER : '',
+                    deepseek: pa.deepseek ? KEY_PLACEHOLDER : '',
                     lmStudio: {
                         baseUrl: pa.lmStudio?.baseUrl || 'http://127.0.0.1:1234',
                         apiKey: pa.lmStudio?.apiKey ? KEY_PLACEHOLDER : ''
@@ -88,6 +97,9 @@ const UserProfile = ({ user, onClose }) => {
                     grok: !!pa.grok,
                     gemini: !!pa.gemini,
                     fal: !!pa.fal,
+                    anthropic: !!pa.anthropic,
+                    mistral: !!pa.mistral,
+                    deepseek: !!pa.deepseek,
                     lmStudioApi: !!pa.lmStudio?.apiKey
                 });
             }
@@ -136,7 +148,7 @@ const UserProfile = ({ user, onClose }) => {
         const initial = initialProviderApiKeysRef.current || {};
         const out = {};
 
-        ['openrouter', 'grok', 'gemini', 'fal'].forEach((id) => {
+        ['openrouter', 'grok', 'gemini', 'fal', 'anthropic', 'mistral', 'deepseek'].forEach((id) => {
             const v = providerForm[id];
             if (!v || !String(v).trim()) {
                 return;
@@ -265,7 +277,10 @@ const UserProfile = ({ user, onClose }) => {
     };
 
     const providerRows = [
-        { id: 'openrouter', label: 'OpenRouter', hint: 'OpenAI-compatible gateway; model ids often look like openrouter/...' },
+        { id: 'anthropic', label: 'Anthropic (Claude)', hint: 'Console API key — use model ids starting with claude-' },
+        { id: 'mistral', label: 'Mistral AI', hint: 'La Plateforme key — mistral-large-latest, pixtral, etc.' },
+        { id: 'deepseek', label: 'DeepSeek', hint: 'OpenAI-compatible — deepseek-chat, deepseek-reasoner' },
+        { id: 'openrouter', label: 'OpenRouter', hint: 'OpenAI-compatible gateway; model ids often look like openai/...' },
         { id: 'grok', label: 'xAI (Grok)', hint: 'API key from x.ai / console.x.ai' },
         { id: 'gemini', label: 'Google Gemini', hint: 'Used for Gemini / Imagen when running on the server' },
         { id: 'fal', label: 'Fal', hint: 'Stored for Fal image/video workflows (server routes vary by model)' }

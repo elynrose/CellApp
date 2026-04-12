@@ -95,6 +95,27 @@ async function getActiveModelsLocal() {
       type: 'text',
       provider: 'gemini',
       active: true
+    },
+    {
+      id: 'claude-3-5-sonnet-20241022',
+      name: 'Claude 3.5 Sonnet',
+      type: 'text',
+      provider: 'anthropic',
+      active: true
+    },
+    {
+      id: 'mistral-large-latest',
+      name: 'Mistral Large',
+      type: 'text',
+      provider: 'mistral',
+      active: true
+    },
+    {
+      id: 'deepseek-chat',
+      name: 'DeepSeek Chat',
+      type: 'text',
+      provider: 'deepseek',
+      active: true
     }
   ];
 }

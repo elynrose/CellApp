@@ -212,7 +212,7 @@ export async function checkJobStatus(jobId) {
 
 /**
  * Verify an API key via the server (lightweight provider request).
- * @param {string} provider - openai | gemini | openrouter | grok | fal | lmstudio | ollama
+ * @param {string} provider - openai | gemini | anthropic | mistral | deepseek | openrouter | grok | fal | lmstudio | ollama
  * @param {string} [apiKey]
  * @param {{ baseUrl?: string }} [options] - required for lmstudio / ollama
  */

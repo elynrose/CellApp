@@ -40,6 +40,8 @@ const admin = require('firebase-admin');
 function normalizeApiKeyString(raw) {
   if (raw == null) return null;
   let s = String(raw).trim().replace(/^\uFEFF/, '');
+  // Strip accidental line breaks from pasted env / JSON values
+  s = s.replace(/[\r\n\t]+/g, '').trim();
   if (!s) return null;
   if (/^bearer\s+/i.test(s)) {
     s = s.replace(/^bearer\s+/i, '').trim();
@@ -56,10 +58,15 @@ function trimOpenAIEnv(v) {
 }
 
 /**
- * Optional headers for multi-org accounts or legacy user keys.
+ * Optional headers for multi-org accounts (pooled / server keys only by default).
+ * Applying org/project to a user's own API key often causes 401 — keys are scoped to another org.
+ * Set OPENAI_APPLY_ORG_TO_USER_KEYS=true to force org headers for user keys (rare).
  * @see https://platform.openai.com/docs/api-reference/organizations-and-projects-optional
  */
-function getOpenAIEnvHeaders() {
+function getOpenAIEnvHeaders(keySource = 'pooled') {
+  if (keySource === 'user' && process.env.OPENAI_APPLY_ORG_TO_USER_KEYS !== 'true') {
+    return {};
+  }
   const h = {};
   const org = trimOpenAIEnv(process.env.OPENAI_ORG_ID) || trimOpenAIEnv(process.env.OPENAI_ORGANIZATION);
   if (org) h['OpenAI-Organization'] = org;
@@ -68,8 +75,11 @@ function getOpenAIEnvHeaders() {
   return h;
 }
 
-function buildOpenAIClientOptions(apiKey) {
-  const opts = { apiKey };
+function buildOpenAIClientOptions(apiKey, keySource = 'pooled') {
+  const opts = { apiKey: normalizeApiKeyString(apiKey) };
+  if (keySource === 'user' && process.env.OPENAI_APPLY_ORG_TO_USER_KEYS !== 'true') {
+    return opts;
+  }
   const org = trimOpenAIEnv(process.env.OPENAI_ORG_ID) || trimOpenAIEnv(process.env.OPENAI_ORGANIZATION);
   if (org) opts.organization = org;
   const project = trimOpenAIEnv(process.env.OPENAI_PROJECT_ID);
@@ -77,10 +87,48 @@ function buildOpenAIClientOptions(apiKey) {
   return opts;
 }
 
+/** Parse OpenAI-style JSON error bodies for clearer client messages. */
+function summarizeProviderError(statusCode, bodyStr) {
+  const raw = String(bodyStr || '').trim();
+  try {
+    const j = JSON.parse(raw);
+    const msg = j.error?.message || j.message || j.detail;
+    if (typeof msg === 'string' && msg.length > 0) {
+      return `API Error ${statusCode}: ${msg}`;
+    }
+  } catch {
+    // ignore
+  }
+  return `API Error ${statusCode}: ${raw.substring(0, 400)}`;
+}
+
+/**
+ * Chat Completions body: reasoning / o-series models use max_completion_tokens and may reject temperature.
+ */
+function buildOpenAIChatCompletionBody(model, prompt, temperature, maxTokens) {
+  const m = String(model || '').toLowerCase();
+  const body = {
+    model,
+    messages: [{ role: 'user', content: prompt }]
+  };
+  const isReasoningStyle = /^o[0-9]/.test(m) || m.startsWith('gpt-5');
+  if (!isReasoningStyle && temperature !== undefined) {
+    body.temperature = temperature;
+  }
+  if (maxTokens !== undefined && maxTokens > 0) {
+    if (isReasoningStyle) {
+      body.max_completion_tokens = maxTokens;
+    } else {
+      body.max_tokens = maxTokens;
+    }
+  }
+  return body;
+}
+
 function normalizeProviderApiKeys(raw) {
   if (!raw || typeof raw !== 'object') return {};
   const out = { ...raw };
-  for (const k of ['openrouter', 'grok', 'gemini', 'fal']) {
+  for (const k of ['openrouter', 'grok', 'gemini', 'fal', 'anthropic', 'mistral', 'deepseek']) {
     if (out[k] != null && typeof out[k] === 'string') {
       const n = normalizeApiKeyString(out[k]);
       out[k] = n || '';
@@ -152,6 +200,16 @@ function inferProviderFromModel(model) {
   const m = String(model || '').toLowerCase();
   if (!m) return 'openai';
   if (m.includes('gemini') || m.includes('imagen')) return 'gemini';
+  if (m.startsWith('claude') || m.includes('anthropic/')) return 'anthropic';
+  if (
+    m.startsWith('mistral') ||
+    m.startsWith('ministral') ||
+    m.startsWith('mixtral') ||
+    m.startsWith('codestral')
+  ) {
+    return 'mistral';
+  }
+  if (m.startsWith('deepseek')) return 'deepseek';
   if (m.startsWith('openrouter/') || m.includes('openrouter')) return 'openrouter';
   if (m.startsWith('grok-') || m.startsWith('grok/') || m.startsWith('x-ai/') || m.startsWith('xai/')) {
     return 'grok';
@@ -219,14 +277,7 @@ async function openAICompatibleChat(baseUrl, apiKey, model, prompt, temperature,
   const root = String(baseUrl).replace(/\/$/, '');
   const path = /\/v1$/i.test(root) ? '/chat/completions' : '/v1/chat/completions';
   const url = `${root}${path}`;
-  const body = {
-    model,
-    messages: [{ role: 'user', content: prompt }],
-    temperature
-  };
-  if (maxTokens !== undefined && maxTokens > 0) {
-    body.max_tokens = maxTokens;
-  }
+  const body = buildOpenAIChatCompletionBody(model, prompt, temperature, maxTokens);
   const headers = { ...extraHeaders };
   const nk = normalizeApiKeyString(apiKey);
   if (nk) {
@@ -253,6 +304,31 @@ async function ollamaNativeChat(baseUrl, model, prompt, temperature) {
   };
   const data = await postHttpsOrHttpJson(url, body, {});
   const text = data.message?.content || data.response || 'No response generated';
+  return { text };
+}
+
+function stripAnthropicModelId(model) {
+  return String(model || '')
+    .replace(/^anthropic\//i, '')
+    .trim();
+}
+
+/** Claude — Messages API (https://docs.anthropic.com/) */
+async function anthropicMessagesChat(apiKey, model, prompt, temperature, maxTokens) {
+  const nk = normalizeApiKeyString(apiKey);
+  if (!nk) throw new Error('Anthropic API key required');
+  const modelId = stripAnthropicModelId(model);
+  const body = {
+    model: modelId,
+    max_tokens: maxTokens && maxTokens > 0 ? Math.min(maxTokens, 8192) : 4096,
+    messages: [{ role: 'user', content: prompt }],
+    temperature: temperature ?? 1
+  };
+  const data = await postHttpsOrHttpJson('https://api.anthropic.com/v1/messages', body, {
+    'x-api-key': nk,
+    'anthropic-version': '2023-06-01'
+  });
+  const text = data.content?.[0]?.text || data.error?.message || 'No response generated';
   return { text };
 }
 
@@ -341,9 +417,9 @@ async function probeProviderApiKey(provider, apiKey, baseUrl) {
   switch (provider) {
     case 'openai': {
       if (!k) throw new Error('API key is required');
+      // Do not send server OPENAI_ORG_* headers — user is validating their own pasted key.
       const { status, body } = await httpOrHttpsGet('https://api.openai.com/v1/models?limit=5', {
-        Authorization: `Bearer ${k}`,
-        ...getOpenAIEnvHeaders()
+        Authorization: `Bearer ${k}`
       });
       if (status === 200) return { ok: true, message: 'OpenAI key is valid (listed models).' };
       if (status === 401) throw new Error('Invalid OpenAI API key (401).');
@@ -427,6 +503,41 @@ async function probeProviderApiKey(provider, apiKey, baseUrl) {
       const { status, body } = await httpOrHttpsGet(`${root}/api/tags`);
       if (status === 200) return { ok: true, message: 'Ollama server is reachable.' };
       throw new Error(`Ollama check failed (${status}): ${body.substring(0, 280)}`);
+    }
+    case 'anthropic': {
+      if (!k) throw new Error('API key is required');
+      const { status, body } = await httpOrHttpsGet('https://api.anthropic.com/v1/models', {
+        'x-api-key': k,
+        'anthropic-version': '2023-06-01'
+      });
+      if (status === 200) return { ok: true, message: 'Anthropic key is valid.' };
+      if (status === 401) throw new Error('Invalid Anthropic API key (401).');
+      if (status === 404) {
+        return {
+          ok: true,
+          message:
+            'Anthropic returned 404 on model list (API variance). If generation works, you can ignore this.'
+        };
+      }
+      throw new Error(`Anthropic check failed (${status}): ${body.substring(0, 280)}`);
+    }
+    case 'mistral': {
+      if (!k) throw new Error('API key is required');
+      const { status, body } = await httpOrHttpsGet('https://api.mistral.ai/v1/models', {
+        Authorization: `Bearer ${k}`
+      });
+      if (status === 200) return { ok: true, message: 'Mistral key is valid.' };
+      if (status === 401 || status === 403) throw new Error('Invalid Mistral API key.');
+      throw new Error(`Mistral check failed (${status}): ${body.substring(0, 280)}`);
+    }
+    case 'deepseek': {
+      if (!k) throw new Error('API key is required');
+      const { status, body } = await httpOrHttpsGet('https://api.deepseek.com/v1/models', {
+        Authorization: `Bearer ${k}`
+      });
+      if (status === 200) return { ok: true, message: 'DeepSeek key is valid.' };
+      if (status === 401 || status === 403) throw new Error('Invalid DeepSeek API key.');
+      throw new Error(`DeepSeek check failed (${status}): ${body.substring(0, 280)}`);
     }
     default:
       throw new Error(`Unknown provider: ${provider}`);
@@ -944,14 +1055,17 @@ const MODEL_PROVIDERS = {
 
 /**
  * Make HTTP request to any API provider with dynamic API key
+ * @param {{ openAiKeySource?: 'pooled' | 'user' }} [meta] - pooled keys may include OPENAI_ORG headers; user keys must not (401).
  */
-async function makeAPIRequest(provider, endpoint, data = null, apiKey = null) {
+async function makeAPIRequest(provider, endpoint, data = null, apiKey = null, meta = {}) {
   return new Promise(async (resolve, reject) => {
     const config = MODEL_PROVIDERS[provider];
     if (!config) {
       reject(new Error(`Unknown provider: ${provider}`));
       return;
     }
+
+    const openAiKeySource = meta.openAiKeySource || 'pooled';
 
     // Get API key dynamically if not provided
     let finalApiKey = normalizeApiKeyString(apiKey);
@@ -998,7 +1112,7 @@ async function makeAPIRequest(provider, endpoint, data = null, apiKey = null) {
     } else {
       // OpenAI uses Bearer token
       options.headers['Authorization'] = `Bearer ${finalApiKey}`;
-      Object.assign(options.headers, getOpenAIEnvHeaders());
+      Object.assign(options.headers, getOpenAIEnvHeaders(openAiKeySource));
     }
 
     // Add timeout to prevent hanging requests
@@ -1016,7 +1130,7 @@ async function makeAPIRequest(provider, endpoint, data = null, apiKey = null) {
           if (res.statusCode >= 400) {
             const errorData = Buffer.concat(chunks).toString();
             console.log(`❌ API Error ${res.statusCode}: ${errorData}`);
-            reject(new Error(`API Error ${res.statusCode}: ${errorData.substring(0, 200)}`));
+            reject(new Error(summarizeProviderError(res.statusCode, errorData)));
             return;
           }
 
@@ -1036,7 +1150,7 @@ async function makeAPIRequest(provider, endpoint, data = null, apiKey = null) {
 
           if (res.statusCode >= 400) {
             console.log(`❌ API Error ${res.statusCode}: ${responseData}`);
-            reject(new Error(`API Error ${res.statusCode}: ${responseData.substring(0, 200)}`));
+            reject(new Error(summarizeProviderError(res.statusCode, responseData)));
             return;
           }
 
@@ -1312,6 +1426,8 @@ async function callHybridAI(model, prompt, temperature = 0.7, maxTokens = undefi
     const skipCreditDeduction = false;
     
     let openaiApiKey = await getPooledOpenAIApiKey();
+    /** 'user' = profile key — must not send server OPENAI_ORG_* headers (causes 401). */
+    let openAiKeySource = 'pooled';
     let geminiApiKey = process.env.GEMINI_API_KEY;
     try {
       const gk = await getGeminiApiKey();
@@ -1334,6 +1450,7 @@ async function callHybridAI(model, prompt, temperature = 0.7, maxTokens = undefi
 
         if (userApiKeyData.hasUserApiKey && userApiKeyData.apiKey) {
           openaiApiKey = userApiKeyData.apiKey;
+          openAiKeySource = 'user';
           console.log(`✅ Using user's OpenAI API key for generation (overrides pooled/env key)`);
         } else if (providerForPolicy === 'openai' && !isPro) {
           throw new Error('Pro subscription required to use shared API key. Please upgrade to Pro or add your own OpenAI API key in your profile settings.');
@@ -1377,6 +1494,30 @@ async function callHybridAI(model, prompt, temperature = 0.7, maxTokens = undefi
 
     // OpenAI-compatible third-party text endpoints (user keys from profile)
     if (isTextModel) {
+      if (provider === 'anthropic') {
+        const k = normalizeApiKeyString(providerApiKeys.anthropic);
+        if (!k) {
+          throw new Error('Add your Anthropic API key under Profile → API providers (Claude models).');
+        }
+        const out = await anthropicMessagesChat(k, model, prompt, temperature, maxTokens);
+        return { text: out.text, skipCreditDeduction };
+      }
+      if (provider === 'mistral') {
+        const k = normalizeApiKeyString(providerApiKeys.mistral);
+        if (!k) {
+          throw new Error('Add your Mistral API key under Profile → API providers.');
+        }
+        const out = await openAICompatibleChat('https://api.mistral.ai/v1', k, model, prompt, temperature, maxTokens);
+        return { text: out.text, skipCreditDeduction };
+      }
+      if (provider === 'deepseek') {
+        const k = normalizeApiKeyString(providerApiKeys.deepseek);
+        if (!k) {
+          throw new Error('Add your DeepSeek API key under Profile → API providers.');
+        }
+        const out = await openAICompatibleChat('https://api.deepseek.com/v1', k, model, prompt, temperature, maxTokens);
+        return { text: out.text, skipCreditDeduction };
+      }
       if (provider === 'openrouter') {
         const k = (providerApiKeys.openrouter || '').trim();
         if (!k) {
@@ -1513,7 +1654,7 @@ async function callHybridAI(model, prompt, temperature = 0.7, maxTokens = undefi
 
       // Use OpenAI SDK's videos.create method
       // The SDK should handle the correct endpoint automatically
-      const openai = new OpenAI(buildOpenAIClientOptions(openaiApiKey));
+      const openai = new OpenAI(buildOpenAIClientOptions(openaiApiKey, openAiKeySource));
 
       console.log(`🚀 Using OpenAI SDK videos.create with:`);
       console.log(`   Model: ${requestData.model}`);
@@ -1591,7 +1732,9 @@ async function callHybridAI(model, prompt, temperature = 0.7, maxTokens = undefi
           size: '1024x1024'
         };
 
-        const response = await makeAPIRequest('openai', '/images/generations', requestBody, openaiApiKey);
+        const response = await makeAPIRequest('openai', '/images/generations', requestBody, openaiApiKey, {
+          openAiKeySource
+        });
         const imageUrl = response.data?.[0]?.url || 'No image generated';
         return { text: imageUrl, skipCreditDeduction };
       } else {
@@ -1622,7 +1765,9 @@ async function callHybridAI(model, prompt, temperature = 0.7, maxTokens = undefi
       };
       const mimeType = mimeTypes[audioFormat] || 'audio/mpeg';
 
-      const audioBase64 = await makeAPIRequest('openai', '/audio/speech', requestBody, openaiApiKey);
+      const audioBase64 = await makeAPIRequest('openai', '/audio/speech', requestBody, openaiApiKey, {
+        openAiKeySource
+      });
       // Return base64 audio data URL with correct MIME type
       return `data:${mimeType};base64,${audioBase64}`;
 
@@ -1655,19 +1800,11 @@ async function callHybridAI(model, prompt, temperature = 0.7, maxTokens = undefi
           throw new Error('OpenAI API key is required for text generation. Please add your API key in profile settings or upgrade to Pro to use the shared API key.');
         }
 
-        const requestBody = {
-          model: model,
-          messages: [
-            { role: 'user', content: prompt }
-          ],
-          temperature: temperature
-        };
-        
-        if (maxTokens !== undefined && maxTokens > 0) {
-          requestBody.max_tokens = maxTokens;
-        }
-        
-        const response = await makeAPIRequest('openai', '/chat/completions', requestBody, openaiApiKey);
+        const requestBody = buildOpenAIChatCompletionBody(model, prompt, temperature, maxTokens);
+
+        const response = await makeAPIRequest('openai', '/chat/completions', requestBody, openaiApiKey, {
+          openAiKeySource
+        });
         const text = response.choices?.[0]?.message?.content || 'No response generated';
         return { text, skipCreditDeduction };
       } else {
@@ -1679,19 +1816,11 @@ async function callHybridAI(model, prompt, temperature = 0.7, maxTokens = undefi
         throw new Error('OpenAI API key is required. Please add your API key in profile settings or upgrade to Pro to use the shared API key.');
       }
 
-      const requestBody = {
-        model: 'gpt-3.5-turbo',
-        messages: [
-          { role: 'user', content: prompt }
-        ],
-        temperature: temperature
-      };
-      
-      if (maxTokens !== undefined && maxTokens > 0) {
-        requestBody.max_tokens = maxTokens;
-      }
-      
-      const response = await makeAPIRequest('openai', '/chat/completions', requestBody, openaiApiKey);
+      const requestBody = buildOpenAIChatCompletionBody('gpt-3.5-turbo', prompt, temperature, maxTokens);
+
+      const response = await makeAPIRequest('openai', '/chat/completions', requestBody, openaiApiKey, {
+        openAiKeySource
+      });
       const text = response.choices?.[0]?.message?.content || 'No response generated';
       return { text, skipCreditDeduction };
     }
@@ -1855,13 +1984,23 @@ const server = http.createServer(async (req, res) => {
     // Firebase configuration endpoint - respond with dynamic config from environment, fallback to file
     if (req.url === '/firebase-config.js') {
       const envConfig = {
-        apiKey: process.env.FIREBASE_API_KEY,
-        authDomain: process.env.FIREBASE_AUTH_DOMAIN || 'cellulai.firebaseapp.com',
-        projectId: process.env.FIREBASE_PROJECT_ID || 'cellulai',
-        storageBucket: process.env.FIREBASE_STORAGE_BUCKET || 'cellulai.appspot.com',
-        messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || '857760697765',
-        appId: process.env.FIREBASE_APP_ID || '1:857760697765:web:74605f6e0667d0feebec4c',
-        measurementId: process.env.FIREBASE_MEASUREMENT_ID || 'G-NBGFZ6T90R'
+        apiKey:
+          process.env.FIREBASE_API_KEY ||
+          'AIzaSyAvht3bQYdZafX5_Rc4hmEHQHW-WNGaw4Q',
+        authDomain:
+          process.env.FIREBASE_AUTH_DOMAIN || 'cellapp-prod-a3f9.firebaseapp.com',
+        projectId: process.env.FIREBASE_PROJECT_ID || 'cellapp-prod-a3f9',
+        storageBucket:
+          process.env.FIREBASE_STORAGE_BUCKET ||
+          'cellapp-prod-a3f9.firebasestorage.app',
+        messagingSenderId:
+          process.env.FIREBASE_MESSAGING_SENDER_ID || '384242874610',
+        appId:
+          process.env.FIREBASE_APP_ID ||
+          '1:384242874610:web:ba18a8869410c95453786b',
+        ...(process.env.FIREBASE_MEASUREMENT_ID
+          ? { measurementId: process.env.FIREBASE_MEASUREMENT_ID }
+          : {})
       };
 
       const hasApiKey = typeof envConfig.apiKey === 'string' && envConfig.apiKey.trim().length > 0 && envConfig.apiKey !== 'YOUR_FIREBASE_API_KEY';
@@ -2581,7 +2720,8 @@ window.storage = storage;`;
         }
         
         let openaiApiKey = await getPooledOpenAIApiKey();
-        
+        let jobStatusOpenAiKeySource = 'pooled';
+
         // Try to get user's API key if userId is provided
         if (userId) {
           try {
@@ -2589,6 +2729,7 @@ window.storage = storage;`;
             if (userApiKeyData.hasUserApiKey && userApiKeyData.apiKey) {
               // User has their own API key - use it regardless of subscription
               openaiApiKey = userApiKeyData.apiKey;
+              jobStatusOpenAiKeySource = 'user';
               console.log(`✅ Using user's API key for job status check (overrides pooled/env key)`);
             } else if (!userApiKeyData.isPro) {
               // User doesn't have their own API key and is not Pro - cannot use environment key
@@ -2632,7 +2773,7 @@ window.storage = storage;`;
           headers: {
             'Authorization': `Bearer ${openaiApiKey}`,
             'OpenAI-Beta': 'sora-2',
-            ...getOpenAIEnvHeaders()
+            ...getOpenAIEnvHeaders(jobStatusOpenAiKeySource)
           }
         };
 
@@ -2708,7 +2849,7 @@ window.storage = storage;`;
                       headers: {
                         'Authorization': `Bearer ${openaiApiKey}`,
                         'OpenAI-Beta': 'sora-2',
-                        ...getOpenAIEnvHeaders()
+                        ...getOpenAIEnvHeaders(jobStatusOpenAiKeySource)
                       }
                     };
                     
@@ -3121,11 +3262,13 @@ window.storage = storage;`;
           // Add authentication for OpenAI content endpoints
           if (isOpenAIContentEndpoint) {
             let openaiApiKey = await getPooledOpenAIApiKey();
+            let proxyImageKeySource = 'pooled';
             if (verifiedUserId) {
               try {
                 const ctx = await getUserApiKeyAndSubscription(verifiedUserId);
                 if (ctx.hasUserApiKey && ctx.apiKey) {
                   openaiApiKey = ctx.apiKey;
+                  proxyImageKeySource = 'user';
                   console.log(`🔑 Using user OpenAI key for proxy-image (overrides pooled/env)`);
                 }
               } catch (e) {
@@ -3135,7 +3278,7 @@ window.storage = storage;`;
             if (openaiApiKey) {
               requestOptions.headers['Authorization'] = `Bearer ${openaiApiKey}`;
               requestOptions.headers['OpenAI-Beta'] = 'sora-2';
-              Object.assign(requestOptions.headers, getOpenAIEnvHeaders());
+              Object.assign(requestOptions.headers, getOpenAIEnvHeaders(proxyImageKeySource));
               console.log(`🔑 Adding authentication for OpenAI content endpoint`);
             } else {
               res.statusCode = 500;
@@ -3291,7 +3434,8 @@ window.storage = storage;`;
         }
         
         let openaiApiKey = await getPooledOpenAIApiKey();
-        
+        let videoProxyKeySource = 'pooled';
+
         // Try to get user's API key if userId is provided
         if (userId) {
           try {
@@ -3299,6 +3443,7 @@ window.storage = storage;`;
             if (userApiKeyData.hasUserApiKey && userApiKeyData.apiKey) {
               // User has their own API key - use it regardless of subscription
               openaiApiKey = userApiKeyData.apiKey;
+              videoProxyKeySource = 'user';
               console.log(`✅ Using user's API key for video proxy (overrides pooled/env key)`);
             } else if (!userApiKeyData.isPro) {
               // User doesn't have their own API key and is not Pro - cannot use environment key
@@ -3337,7 +3482,7 @@ window.storage = storage;`;
           headers: {
             'Authorization': `Bearer ${openaiApiKey}`,
             'OpenAI-Beta': 'sora-2',
-            ...getOpenAIEnvHeaders()
+            ...getOpenAIEnvHeaders(videoProxyKeySource)
           }
         };
         
@@ -3576,7 +3721,9 @@ window.storage = storage;`;
               }
 
               // Get storage bucket name from environment or use default
-              const storageBucket = process.env.FIREBASE_STORAGE_BUCKET || 'cellulai.firebasestorage.app';
+              const storageBucket =
+                process.env.FIREBASE_STORAGE_BUCKET ||
+                'cellapp-prod-a3f9.firebasestorage.app';
               const bucket = admin.storage().bucket(storageBucket);
               const timestamp = Date.now();
               const extension = 'mp4';

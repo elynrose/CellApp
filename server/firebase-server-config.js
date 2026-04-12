@@ -5,6 +5,10 @@
 
 const admin = require('firebase-admin');
 
+/** Default GCP/Firebase project for Admin SDK fallbacks (env overrides). */
+const DEFAULT_FIREBASE_PROJECT_ID = 'cellapp-prod-a3f9';
+const DEFAULT_STORAGE_BUCKET = 'cellapp-prod-a3f9.firebasestorage.app';
+
 let firestore = null;
 
 /**
@@ -33,8 +37,8 @@ async function initializeFirebase() {
             console.log('✅ Using Firebase service account credentials');
             admin.initializeApp({
               credential: admin.credential.cert(serviceAccount),
-              projectId: process.env.FIREBASE_PROJECT_ID || 'cellulai',
-              storageBucket: process.env.FIREBASE_STORAGE_BUCKET || 'cellulai.firebasestorage.app'
+              projectId: process.env.FIREBASE_PROJECT_ID || DEFAULT_FIREBASE_PROJECT_ID,
+              storageBucket: process.env.FIREBASE_STORAGE_BUCKET || DEFAULT_STORAGE_BUCKET
             });
           } else {
             // Invalid service account, skip Firebase Admin SDK initialization
@@ -52,8 +56,8 @@ async function initializeFirebase() {
       } else {
         // Fallback: Use default credentials (for Railway/Heroku)
         admin.initializeApp({
-          projectId: process.env.FIREBASE_PROJECT_ID || 'cellulai',
-          storageBucket: process.env.FIREBASE_STORAGE_BUCKET || 'cellulai.firebasestorage.app'
+          projectId: process.env.FIREBASE_PROJECT_ID || DEFAULT_FIREBASE_PROJECT_ID,
+          storageBucket: process.env.FIREBASE_STORAGE_BUCKET || DEFAULT_STORAGE_BUCKET
         });
       }
     } else {
@@ -65,8 +69,8 @@ async function initializeFirebase() {
           if (serviceAccount.private_key && serviceAccount.private_key !== '') {
             admin.initializeApp({
               credential: admin.credential.cert(serviceAccount),
-              projectId: process.env.FIREBASE_PROJECT_ID || 'cellulai',
-              storageBucket: process.env.FIREBASE_STORAGE_BUCKET || 'cellulai.firebasestorage.app'
+              projectId: process.env.FIREBASE_PROJECT_ID || DEFAULT_FIREBASE_PROJECT_ID,
+              storageBucket: process.env.FIREBASE_STORAGE_BUCKET || DEFAULT_STORAGE_BUCKET
             });
           } else {
             // Invalid service account, try local file or default
@@ -75,12 +79,12 @@ async function initializeFirebase() {
               const serviceAccount = require('./cellulai-firebase-adminsdk-fbsvc-ec0b26e7de.json');
               admin.initializeApp({
                 credential: admin.credential.cert(serviceAccount),
-                projectId: 'cellulai',
-                storageBucket: process.env.FIREBASE_STORAGE_BUCKET || 'cellulai.firebasestorage.app'
+                projectId: DEFAULT_FIREBASE_PROJECT_ID,
+                storageBucket: process.env.FIREBASE_STORAGE_BUCKET || DEFAULT_STORAGE_BUCKET
               });
             } catch (error) {
               admin.initializeApp({
-                projectId: 'cellulai'
+                projectId: DEFAULT_FIREBASE_PROJECT_ID
               });
             }
           }
@@ -91,12 +95,12 @@ async function initializeFirebase() {
             const serviceAccount = require('./cellulai-firebase-adminsdk-fbsvc-ec0b26e7de.json');
             admin.initializeApp({
               credential: admin.credential.cert(serviceAccount),
-              projectId: 'cellulai'
+              projectId: DEFAULT_FIREBASE_PROJECT_ID
             });
           } catch (error) {
             admin.initializeApp({
-              projectId: 'cellulai',
-              storageBucket: process.env.FIREBASE_STORAGE_BUCKET || 'cellulai.firebasestorage.app'
+              projectId: DEFAULT_FIREBASE_PROJECT_ID,
+              storageBucket: process.env.FIREBASE_STORAGE_BUCKET || DEFAULT_STORAGE_BUCKET
             });
           }
         }
@@ -106,12 +110,12 @@ async function initializeFirebase() {
           const serviceAccount = require('./cellulai-firebase-adminsdk-fbsvc-ec0b26e7de.json');
           admin.initializeApp({
             credential: admin.credential.cert(serviceAccount),
-            projectId: 'cellulai'
+            projectId: DEFAULT_FIREBASE_PROJECT_ID
           });
         } catch (error) {
           // No service account file, use default credentials
           admin.initializeApp({
-            projectId: 'cellulai'
+            projectId: DEFAULT_FIREBASE_PROJECT_ID
           });
         }
       }
