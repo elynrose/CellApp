@@ -35,7 +35,7 @@ const ImageWithErrorHandling = ({ src, alt, className, draggable, ...props }) =>
         try {
             const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
                 ? '' 
-                : 'https://gpt-cells-app-production.up.railway.app';
+                : 'https://cellapp-production.up.railway.app';
             
             const response = await fetch(`${API_BASE_URL}/api/proxy-image`, {
                 method: 'POST',
@@ -737,7 +737,7 @@ const Card = ({ cell, onUpdate, onPositionChange, onRunCell, onStopCell, onDelet
                     // Use relative URL in development (Vite proxy), absolute in production
                     const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
                         ? '' 
-                        : 'https://gpt-cells-app-production.up.railway.app';
+                        : 'https://cellapp-production.up.railway.app';
                     videoSrc = `${API_BASE_URL}/api/proxy-video/${videoId}`;
                     console.log(`🎬 Converted OpenAI content URL to proxy: ${videoSrc}`);
                 }

@@ -34,9 +34,9 @@ function getApiBaseUrl() {
     return '';
   }
   if (host === 'localhost' || host === '127.0.0.1') {
-    return 'https://gpt-cells-app-production.up.railway.app';
+    return 'https://cellapp-production.up.railway.app';
   }
-  return 'https://gpt-cells-app-production.up.railway.app';
+  return 'https://cellapp-production.up.railway.app';
 }
 
 /**
@@ -52,6 +52,7 @@ export async function generateAI(
   provider = undefined
 ) {
   try {
+    const API_BASE_URL = getApiBaseUrl();
     const resolvedProvider = provider || inferProviderFromModel(model);
     const requestBody = {
       prompt,
@@ -128,7 +129,7 @@ export async function generateAI(
         const fixedJson = JSON.stringify(fixedBody);
         console.error(`   ✅ Fixed JSON: ${fixedJson}`);
         // Use the fixed JSON
-        const response = await fetch(`${getApiBaseUrl()}/api/llm`, {
+        const response = await fetch(`${API_BASE_URL}/api/llm`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
