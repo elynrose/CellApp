@@ -60,10 +60,15 @@ export async function generateAI(
       temperature,
       provider: resolvedProvider
     };
-    
-    // Add max_tokens if specified (for text generation)
-    if (maxTokens !== undefined && maxTokens > 0) {
-      requestBody.max_tokens = maxTokens;
+
+    /** Claude-family models often reject >4096 completion tokens (Haiku, many Sonnet calls via OpenRouter). */
+    let effectiveMax = maxTokens;
+    if (effectiveMax !== undefined && effectiveMax > 0) {
+      const m = String(model || '').toLowerCase();
+      if (m.includes('claude') || m.includes('anthropic/') || m.startsWith('anthropic:')) {
+        effectiveMax = Math.min(effectiveMax, 4096);
+      }
+      requestBody.max_tokens = effectiveMax;
     }
 
     // Add video settings if specified (for video generation)

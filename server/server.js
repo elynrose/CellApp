@@ -110,6 +110,26 @@ function summarizeProviderError(statusCode, bodyStr) {
 }
 
 /**
+ * Many Claude models (incl. Haiku) allow at most 4096 completion tokens. Applies to direct API and
+ * OpenAI-compatible proxies (OpenRouter: anthropic/claude-*, etc.).
+ */
+const CLAUDE_MAX_OUTPUT_TOKENS = 4096;
+
+function capCompletionTokensForClaudeFamily(model, maxTokens) {
+  if (maxTokens === undefined || maxTokens <= 0) return maxTokens;
+  const m = String(model || '').toLowerCase();
+  if (
+    m.includes('claude') ||
+    m.includes('anthropic/') ||
+    m.startsWith('anthropic:') ||
+    m.includes('/claude')
+  ) {
+    return Math.min(maxTokens, CLAUDE_MAX_OUTPUT_TOKENS);
+  }
+  return maxTokens;
+}
+
+/**
  * Chat Completions body: reasoning / o-series models use max_completion_tokens and may reject temperature.
  */
 function buildOpenAIChatCompletionBody(model, prompt, temperature, maxTokens) {
@@ -122,11 +142,12 @@ function buildOpenAIChatCompletionBody(model, prompt, temperature, maxTokens) {
   if (!isReasoningStyle && temperature !== undefined) {
     body.temperature = temperature;
   }
-  if (maxTokens !== undefined && maxTokens > 0) {
+  const capped = capCompletionTokensForClaudeFamily(model, maxTokens);
+  if (capped !== undefined && capped > 0) {
     if (isReasoningStyle) {
-      body.max_completion_tokens = maxTokens;
+      body.max_completion_tokens = capped;
     } else {
-      body.max_tokens = maxTokens;
+      body.max_tokens = capped;
     }
   }
   return body;
@@ -320,12 +341,6 @@ function stripAnthropicModelId(model) {
     .trim();
 }
 
-/**
- * Anthropic output cap: many models (e.g. Haiku) reject max_tokens above 4096.
- * Do not use 8192 here — API returns 400 "max_tokens is too large" for those models.
- */
-const ANTHROPIC_MAX_OUTPUT_TOKENS_CAP = 4096;
-
 /** Claude — Messages API (https://docs.anthropic.com/) */
 async function anthropicMessagesChat(apiKey, model, prompt, temperature, maxTokens) {
   const nk = normalizeApiKeyString(apiKey);
@@ -335,8 +350,8 @@ async function anthropicMessagesChat(apiKey, model, prompt, temperature, maxToke
     model: modelId,
     max_tokens:
       maxTokens && maxTokens > 0
-        ? Math.min(maxTokens, ANTHROPIC_MAX_OUTPUT_TOKENS_CAP)
-        : ANTHROPIC_MAX_OUTPUT_TOKENS_CAP,
+        ? Math.min(maxTokens, CLAUDE_MAX_OUTPUT_TOKENS)
+        : CLAUDE_MAX_OUTPUT_TOKENS,
     messages: [{ role: 'user', content: prompt }],
     temperature: temperature ?? 1
   };

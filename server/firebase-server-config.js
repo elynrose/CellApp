@@ -348,6 +348,9 @@ async function getActiveModelsFromFirebase() {
         if (modelData.maxTokens !== undefined) {
           model.maxTokens = modelData.maxTokens;
         }
+        if (modelData.orchestratorDefault === true) {
+          model.orchestratorDefault = true;
+        }
         
         models.push(model);
       }

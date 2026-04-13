@@ -13,7 +13,7 @@ import { isCurrentUserAdmin, signOutUser } from '../firebase/auth';
 import { 
   getAllUsers, updateUser, deleteUser, 
   getAllProjects, deleteProject,
-  getAllModels, createModel, updateModel, deleteModel,
+  getAllModels, createModel, updateModel, deleteModel, clearOrchestratorDefaultExcept,
   getUserSubscription, resetMonthlyCredits, addCredits, setUserCreditCurrent,
   getAllPackages, createPackage, updatePackage, deletePackage,
   getAllGenerations,
@@ -1168,6 +1168,7 @@ const AdminDashboard = ({ user, onBack, onCreditsGranted }) => {
       const result = await updateModel(modelId, {
         isActive,
         status: isActive ? 'active' : 'inactive',
+        ...(!isActive ? { orchestratorDefault: false } : {}),
         updatedAt: new Date()
       });
       
@@ -2406,7 +2407,16 @@ const AdminDashboard = ({ user, onBack, onCreditsGranted }) => {
                               <div className="text-xs text-gray-500 dark:text-gray-400">Original: {model.originalId}</div>
                             )}
                           </td>
-                          <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">{model.name || 'Unnamed Model'}</td>
+                          <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
+                            <span className="inline-flex items-center gap-2 flex-wrap">
+                              {model.name || 'Unnamed Model'}
+                              {model.orchestratorDefault && (
+                                <span className="px-1.5 py-0.5 text-[10px] font-semibold uppercase rounded bg-violet-100 text-violet-800 dark:bg-violet-900/50 dark:text-violet-200">
+                                  Planner
+                                </span>
+                              )}
+                            </span>
+                          </td>
                           <td className="px-4 py-4 whitespace-nowrap">
                             {(() => {
                               // Infer type from model ID if type is missing
@@ -3614,17 +3624,28 @@ const AdminDashboard = ({ user, onBack, onCreditsGranted }) => {
           model={modals.model.editing}
           onClose={() => setModals(prev => ({ ...prev, model: { open: false, editing: null } }))}
           onSave={async (modelData) => {
+            const payload = { ...modelData };
+            if (payload.type !== 'text' || payload.isActive === false) {
+              payload.orchestratorDefault = false;
+            }
             if (modals.model.editing) {
-              const result = await updateModel(modals.model.editing.id, modelData);
+              const id = modals.model.editing.id;
+              const result = await updateModel(id, payload);
               if (result.success) {
+                if (payload.orchestratorDefault === true) {
+                  await clearOrchestratorDefaultExcept(id);
+                }
                 showNotification('Model updated successfully', 'success');
                 loadModels();
               } else {
                 showNotification(`Failed to update model: ${result.error}`, 'error');
               }
             } else {
-              const result = await createModel(modelData);
+              const result = await createModel(payload);
               if (result.success) {
+                if (payload.orchestratorDefault === true && result.modelId) {
+                  await clearOrchestratorDefaultExcept(result.modelId);
+                }
                 showNotification('Model created successfully', 'success');
                 loadModels();
               } else {
@@ -3802,7 +3823,8 @@ const ModelModal = ({ model, onClose, onSave }) => {
     provider: model?.provider || 'openai',
     description: model?.description || '',
     isActive: model?.isActive !== false,
-    status: model?.status || 'active'
+    status: model?.status || 'active',
+    orchestratorDefault: model?.orchestratorDefault === true
   });
 
   const handleSubmit = (e) => {
@@ -3863,7 +3885,14 @@ const ModelModal = ({ model, onClose, onSave }) => {
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Type</label>
             <select
               value={formData.type}
-              onChange={(e) => setFormData(prev => ({ ...prev, type: e.target.value }))}
+              onChange={(e) => {
+                const type = e.target.value;
+                setFormData((prev) => ({
+                  ...prev,
+                  type,
+                  ...(type !== 'text' ? { orchestratorDefault: false } : {})
+                }));
+              }}
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
             >
               <option value="text">Text</option>
@@ -3901,13 +3930,44 @@ const ModelModal = ({ model, onClose, onSave }) => {
               type="checkbox"
               id="isActive"
               checked={formData.isActive}
-              onChange={(e) => setFormData(prev => ({ ...prev, isActive: e.target.checked, status: e.target.checked ? 'active' : 'inactive' }))}
+              onChange={(e) =>
+                setFormData((prev) => ({
+                  ...prev,
+                  isActive: e.target.checked,
+                  status: e.target.checked ? 'active' : 'inactive',
+                  ...(e.target.checked ? {} : { orchestratorDefault: false })
+                }))
+              }
               className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
             />
             <label htmlFor="isActive" className="text-sm font-medium text-gray-700 dark:text-gray-300">
               Active
             </label>
           </div>
+
+          {formData.type === 'text' && (
+            <div className="rounded-lg border border-violet-200 dark:border-violet-800 bg-violet-50/80 dark:bg-violet-950/30 p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="orchestratorDefault"
+                  checked={formData.orchestratorDefault && formData.isActive}
+                  disabled={!formData.isActive}
+                  onChange={(e) =>
+                    setFormData((prev) => ({ ...prev, orchestratorDefault: e.target.checked }))
+                  }
+                  className="w-4 h-4 text-violet-600 border-gray-300 rounded focus:ring-violet-500"
+                />
+                <label htmlFor="orchestratorDefault" className="text-sm font-medium text-gray-800 dark:text-gray-200">
+                  Default for orchestrator / planner
+                </label>
+              </div>
+              <p className="text-xs text-gray-600 dark:text-gray-400 pl-6">
+                Text models only. The Orchestrator and agent-goal planner use this model for their LLM calls. Other
+                models lose this flag when you save with a new default.
+              </p>
+            </div>
+          )}
           
           <div className="flex items-center justify-end gap-3 pt-4">
             <button

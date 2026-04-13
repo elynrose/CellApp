@@ -508,7 +508,10 @@ export async function getActiveModels() {
         provider: modelData.provider || 'unknown',
         active: true,
         description: modelData.description || '',
-        originalId: modelData.originalId || doc.id
+        originalId: modelData.originalId || doc.id,
+        isActive: modelData.isActive !== false,
+        status: modelData.status,
+        orchestratorDefault: modelData.orchestratorDefault === true
       });
     });
     return { success: true, models };
@@ -686,6 +689,33 @@ export async function createModel(modelData) {
 export async function deleteModel(modelId) {
   try {
     await deleteDoc(doc(db, 'models', modelId));
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Ensure at most one model has orchestratorDefault. Clears the flag on all other models (admin).
+ */
+export async function clearOrchestratorDefaultExcept(keepModelId) {
+  if (!keepModelId) return { success: true };
+  try {
+    const snapshot = await getDocs(collection(db, 'models'));
+    const batch = writeBatch(db);
+    let count = 0;
+    snapshot.forEach((d) => {
+      if (d.id !== keepModelId && d.data()?.orchestratorDefault === true) {
+        batch.update(doc(db, 'models', d.id), {
+          orchestratorDefault: false,
+          updatedAt: serverTimestamp()
+        });
+        count += 1;
+      }
+    });
+    if (count > 0) {
+      await batch.commit();
+    }
     return { success: true };
   } catch (error) {
     return { success: false, error: error.message };

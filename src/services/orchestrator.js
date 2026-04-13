@@ -15,6 +15,10 @@ function pickTextModelId(availableModels) {
     const id = m.id || m.originalId || '';
     return getModelType(id) === 'text' && (m.isActive !== false && m.status !== 'inactive');
   });
+  const preferred = textModels.find((m) => m.orchestratorDefault === true);
+  if (preferred) {
+    return preferred.originalId || preferred.id;
+  }
   if (textModels.length > 0) {
     const m = textModels[0];
     return m.originalId || m.id;
