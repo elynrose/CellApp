@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, User, Save, Upload, Eye, EyeOff, Key, TestTube } from 'lucide-react';
+import { X, User, Save, Upload, Eye, EyeOff, Key, TestTube, Wrench } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { getUserProfile, updateUserProfile } from '../firebase/firestore';
 import { uploadProfilePhoto } from '../firebase/storage';
@@ -51,6 +51,11 @@ const UserProfile = ({ user, onClose }) => {
     const initialProviderApiKeysRef = useRef(null);
     const [testingProvider, setTestingProvider] = useState(null);
 
+    const [toolForm, setToolForm] = useState({ tavily: '' });
+    const [hadToolKey, setHadToolKey] = useState({ tavily: false });
+    const [showTavilyKey, setShowTavilyKey] = useState(false);
+    const initialToolApiKeysRef = useRef(null);
+
     useEffect(() => {
         if (user) {
             loadProfile();
@@ -101,6 +106,13 @@ const UserProfile = ({ user, onClose }) => {
                     mistral: !!pa.mistral,
                     deepseek: !!pa.deepseek,
                     lmStudioApi: !!pa.lmStudio?.apiKey
+                });
+
+                const ta = profile.toolApiKeys || {};
+                initialToolApiKeysRef.current = { ...ta };
+                setHadToolKey({ tavily: !!ta.tavily });
+                setToolForm({
+                    tavily: ta.tavily ? KEY_PLACEHOLDER : ''
                 });
             }
         } catch (err) {
@@ -179,6 +191,21 @@ const UserProfile = ({ user, onClose }) => {
         return out;
     };
 
+    const buildToolApiKeysPayload = () => {
+        const initial = initialToolApiKeysRef.current || {};
+        const v = toolForm.tavily;
+        const next = { ...initial };
+        if (!v || !String(v).trim()) {
+            delete next.tavily;
+        } else if (!isMasked(v)) {
+            next.tavily = String(v).trim();
+        }
+        if (Object.keys(next).length === 0) {
+            return deleteField();
+        }
+        return next;
+    };
+
     const handleSave = async () => {
         if (!user) return;
         setSaving(true);
@@ -201,12 +228,24 @@ const UserProfile = ({ user, onClose }) => {
                 address: address.trim(),
                 profilePhotoUrl: profilePhotoUrl,
                 providerApiKeys: buildProviderApiKeysPayload(),
+                toolApiKeys: buildToolApiKeysPayload(),
                 ...apiKeyUpdate
             };
 
             const result = await updateUserProfile(user.uid, profileData);
             if (result.success) {
                 initialProviderApiKeysRef.current = profileData.providerApiKeys;
+                const initial = initialToolApiKeysRef.current || {};
+                const v = toolForm.tavily;
+                const nextTools = { ...initial };
+                if (!v || !String(v).trim()) {
+                    delete nextTools.tavily;
+                } else if (!isMasked(v)) {
+                    nextTools.tavily = String(v).trim();
+                }
+                initialToolApiKeysRef.current = nextTools;
+                setHadToolKey({ tavily: !!nextTools.tavily });
+                setToolForm({ tavily: nextTools.tavily ? KEY_PLACEHOLDER : '' });
                 setSuccess('Profile updated successfully');
                 setTimeout(() => {
                     setSuccess(null);
@@ -255,6 +294,13 @@ const UserProfile = ({ user, onClose }) => {
                     return;
                 }
                 r = await testProviderApiKey('ollama', '', { baseUrl: base });
+            } else if (which === 'tavily') {
+                const v = (toolForm.tavily || '').trim();
+                if (!v || isMasked(v)) {
+                    setError('Paste your Tavily key to test (replace the masked placeholder).');
+                    return;
+                }
+                r = await testProviderApiKey('tavily', v);
             } else {
                 const v = (providerForm[which] || '').trim();
                 if (!v || isMasked(v)) {
@@ -311,7 +357,7 @@ const UserProfile = ({ user, onClose }) => {
                         </div>
                         <div>
                             <h2 className="text-xl font-bold text-gray-900 dark:text-white">User Profile</h2>
-                            <p className="text-sm text-gray-500 dark:text-gray-400">Manage your profile and API providers</p>
+                            <p className="text-sm text-gray-500 dark:text-gray-400">Manage your profile, API providers, and tools</p>
                         </div>
                     </div>
                     <button
@@ -602,6 +648,63 @@ const UserProfile = ({ user, onClose }) => {
                                     Use model ids like <code className="font-mono">ollama:llama3</code> so the server routes to your Ollama instance.
                                 </p>
                             </div>
+                        </div>
+                    </div>
+
+                    <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
+                        <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-1 flex items-center gap-2">
+                            <Wrench className="w-4 h-4" />
+                            Tools
+                        </h3>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+                            Optional keys for workspace tool integrations (e.g. web search on cards that enable Tavily). When set, your key can override the server default configured in Admin → Tools.
+                        </p>
+                        <div>
+                            <div className="flex items-center justify-between gap-2 mb-1">
+                                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                                    Tavily (web search)
+                                </label>
+                                <button
+                                    type="button"
+                                    onClick={() => runKeyTest('tavily')}
+                                    disabled={!!testingProvider}
+                                    className="text-xs px-2 py-1 rounded-md border border-violet-300 dark:border-violet-600 text-violet-700 dark:text-violet-300 hover:bg-violet-50 dark:hover:bg-violet-900/20 disabled:opacity-50 inline-flex items-center gap-1"
+                                >
+                                    <TestTube className="w-3.5 h-3.5" />
+                                    {testingProvider === 'tavily' ? '…' : 'Test'}
+                                </button>
+                            </div>
+                            <div className="relative">
+                                <input
+                                    type={showTavilyKey ? 'text' : 'password'}
+                                    value={toolForm.tavily}
+                                    onChange={(e) =>
+                                        setToolForm((prev) => ({ ...prev, tavily: e.target.value }))
+                                    }
+                                    className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white font-mono text-sm pr-10"
+                                    placeholder={hadToolKey.tavily ? 'Enter new key to replace' : 'tvly-...'}
+                                    autoComplete="off"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => setShowTavilyKey(!showTavilyKey)}
+                                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                                >
+                                    {showTavilyKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                </button>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">
+                                From{' '}
+                                <a
+                                    href="https://tavily.com"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-blue-600 dark:text-blue-400 hover:underline"
+                                >
+                                    tavily.com
+                                </a>
+                                . Clear the field and save to remove your key.
+                            </p>
                         </div>
                     </div>
                 </div>

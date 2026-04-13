@@ -3,7 +3,7 @@ import {
   Shield, Users, FolderOpen, Brain, Crown, CreditCard, 
   BarChart3, Settings, LogOut, Plus, Edit, Trash2, 
   RefreshCw, Search, X, Check, AlertCircle, Coins, Sparkles,
-  ChevronLeft, ChevronRight, Key, Server, TestTube, Menu
+  ChevronLeft, ChevronRight, Key, Server, TestTube, Menu, Wallet, Wrench
 } from 'lucide-react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, 
@@ -14,7 +14,7 @@ import {
   getAllUsers, updateUser, deleteUser, 
   getAllProjects, deleteProject,
   getAllModels, createModel, updateModel, deleteModel,
-  getUserSubscription, resetMonthlyCredits, updateUserCredits, addCredits,
+  getUserSubscription, resetMonthlyCredits, addCredits, setUserCreditCurrent,
   getAllPackages, createPackage, updatePackage, deletePackage,
   getAllGenerations,
   getAllTemplates, createTemplate, updateTemplate, deleteTemplate,
@@ -24,12 +24,15 @@ import {
   getAdminConfig, setAdminConfig, clearAdminConfigField
 } from '../firebase/firestore';
 import { getSubscriptionPlans, getPlanById } from '../services/subscriptions';
-import { testProviderApiKey } from '../api';
+import { testProviderApiKey, fetchFalModelsForAdmin } from '../api';
 
 /** Shown when a key is already stored so the field is not empty after reload. */
 const KEY_MASK = '••••••••••••••••••••';
 
-const AdminDashboard = ({ user, onBack }) => {
+const AdminDashboard = ({ user, onBack, onCreditsGranted }) => {
+  /** Logged-in admin Firebase uid (avoid shadowing by table row `user` in maps). */
+  const adminUserId = user?.uid;
+
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeSection, setActiveSection] = useState('dashboard');
@@ -90,13 +93,28 @@ const AdminDashboard = ({ user, onBack }) => {
   const [systemSettings, setSystemSettings] = useState({
     openAiConfigured: false,
     geminiConfigured: false,
+    falConfigured: false,
     openAiKeyInput: '',
     geminiKeyInput: '',
+    falKeyInput: '',
     openAiUpdatedAt: null,
     geminiUpdatedAt: null,
+    falUpdatedAt: null,
     loading: false
   });
-  const [testingProviderKey, setTestingProviderKey] = useState({ openai: false, gemini: false });
+  const [toolsSettings, setToolsSettings] = useState({
+    tavilyKeyInput: '',
+    tavilyConfigured: false,
+    tavilyUpdatedAt: null,
+    loading: false
+  });
+  const [testingProviderKey, setTestingProviderKey] = useState({
+    openai: false,
+    gemini: false,
+    fal: false,
+    tavily: false
+  });
+  const [syncingFalModels, setSyncingFalModels] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [pagination, setPagination] = useState({
     users: { page: 1, perPage: 10 },
@@ -695,25 +713,32 @@ const AdminDashboard = ({ user, onBack }) => {
   const loadSystemSettings = async () => {
     setSystemSettings((prev) => ({ ...prev, loading: true }));
     try {
-      const [adminOpenai, settingsOpenai, adminGemini, settingsGemini] = await Promise.all([
+      const [adminOpenai, settingsOpenai, adminGemini, settingsGemini, adminFal, settingsFal] = await Promise.all([
         getAdminConfig('openai'),
         getSettingsDoc('openai'),
         getAdminConfig('gemini'),
-        getSettingsDoc('gemini')
+        getSettingsDoc('gemini'),
+        getAdminConfig('fal'),
+        getSettingsDoc('fal')
       ]);
       const openaiDoc = mergeKeyDoc(adminOpenai, settingsOpenai);
       const geminiDoc = mergeKeyDoc(adminGemini, settingsGemini);
+      const falDoc = mergeKeyDoc(adminFal, settingsFal);
       const hasOpenAi = !!(openaiDoc && openaiDoc.apiKey);
       const hasGemini = !!(geminiDoc && geminiDoc.apiKey);
+      const hasFal = !!(falDoc && falDoc.apiKey);
       setSystemSettings((prev) => ({
         ...prev,
         loading: false,
         openAiConfigured: hasOpenAi,
         geminiConfigured: hasGemini,
+        falConfigured: hasFal,
         openAiUpdatedAt: openaiDoc?.updatedAt ?? null,
         geminiUpdatedAt: geminiDoc?.updatedAt ?? null,
+        falUpdatedAt: falDoc?.updatedAt ?? null,
         openAiKeyInput: hasOpenAi ? KEY_MASK : '',
-        geminiKeyInput: hasGemini ? KEY_MASK : ''
+        geminiKeyInput: hasGemini ? KEY_MASK : '',
+        falKeyInput: hasFal ? KEY_MASK : ''
       }));
     } catch {
       setSystemSettings((prev) => ({ ...prev, loading: false }));
@@ -724,6 +749,30 @@ const AdminDashboard = ({ user, onBack }) => {
   useEffect(() => {
     if (isAdmin && activeSection === 'settings') {
       loadSystemSettings();
+    }
+  }, [isAdmin, activeSection]);
+
+  const loadToolsSettings = async () => {
+    setToolsSettings((prev) => ({ ...prev, loading: true }));
+    try {
+      const res = await getSettingsDoc('tools');
+      const d = res.success && res.data ? res.data : null;
+      const has = !!(d && d.tavilyApiKey);
+      setToolsSettings({
+        loading: false,
+        tavilyConfigured: has,
+        tavilyUpdatedAt: d?.updatedAt ?? null,
+        tavilyKeyInput: has ? KEY_MASK : ''
+      });
+    } catch {
+      setToolsSettings((prev) => ({ ...prev, loading: false }));
+      showNotification('Failed to load tools settings', 'error');
+    }
+  };
+
+  useEffect(() => {
+    if (isAdmin && activeSection === 'tools') {
+      loadToolsSettings();
     }
   }, [isAdmin, activeSection]);
 
@@ -873,6 +922,141 @@ const AdminDashboard = ({ user, onBack }) => {
     }
   };
 
+  const handleSaveFalKey = async () => {
+    const raw = systemSettings.falKeyInput.trim();
+    if (!raw || raw === KEY_MASK) {
+      showNotification(
+        systemSettings.falConfigured
+          ? 'Paste a new API key to replace the one on file (or use Remove).'
+          : 'Paste an API key before saving.',
+        'error'
+      );
+      return;
+    }
+    const [rAdmin, rSettings] = await Promise.all([
+      setAdminConfig('fal', { apiKey: raw }),
+      setSettingsDoc('fal', { apiKey: raw })
+    ]);
+    if (rAdmin.success && rSettings.success) {
+      showNotification('Fal.ai API key saved to admin/fal and settings/fal.', 'success');
+      setSystemSettings((prev) => ({
+        ...prev,
+        falKeyInput: KEY_MASK,
+        falConfigured: true
+      }));
+      await loadSystemSettings();
+    } else {
+      showNotification(
+        `Failed to save Fal key: ${rAdmin.error || rSettings.error || 'Unknown error'}`,
+        'error'
+      );
+    }
+  };
+
+  const handleTestFalKey = async () => {
+    const key = systemSettings.falKeyInput.trim();
+    if (!key || key === KEY_MASK) {
+      showNotification('Paste a key in the field to test it (not the masked placeholder).', 'error');
+      return;
+    }
+    setTestingProviderKey((t) => ({ ...t, fal: true }));
+    try {
+      const r = await testProviderApiKey('fal', key);
+      if (r.success) {
+        showNotification(r.message || 'Fal key is valid.', 'success');
+      } else {
+        showNotification(r.error || 'Test failed', 'error');
+      }
+    } finally {
+      setTestingProviderKey((t) => ({ ...t, fal: false }));
+    }
+  };
+
+  const handleClearFalKey = async () => {
+    if (
+      !window.confirm(
+        'Remove the stored Fal key? The server will use the FAL_KEY or FAL_API_KEY environment variable when this key is absent.'
+      )
+    ) {
+      return;
+    }
+    const rAdmin = await clearAdminConfigField('fal', 'apiKey');
+    await clearSettingsField('fal', 'apiKey');
+    if (rAdmin.success) {
+      showNotification('Fal key removed from Firestore.', 'success');
+      setSystemSettings((prev) => ({
+        ...prev,
+        falConfigured: false,
+        falKeyInput: ''
+      }));
+      await loadSystemSettings();
+    } else {
+      showNotification(`Failed to remove key: ${rAdmin.error}`, 'error');
+    }
+  };
+
+  const handleSaveTavilyKey = async () => {
+    const raw = toolsSettings.tavilyKeyInput.trim();
+    if (!raw || raw === KEY_MASK) {
+      showNotification(
+        toolsSettings.tavilyConfigured
+          ? 'Paste a new Tavily API key to replace the one on file (or use Remove).'
+          : 'Paste a Tavily API key before saving.',
+        'error'
+      );
+      return;
+    }
+    const r = await setSettingsDoc('tools', { tavilyApiKey: raw });
+    if (r.success) {
+      showNotification('Tavily API key saved to settings/tools.', 'success');
+      setToolsSettings((prev) => ({
+        ...prev,
+        tavilyKeyInput: KEY_MASK,
+        tavilyConfigured: true
+      }));
+      await loadToolsSettings();
+    } else {
+      showNotification(`Failed to save Tavily key: ${r.error}`, 'error');
+    }
+  };
+
+  const handleTestTavilyKey = async () => {
+    const key = toolsSettings.tavilyKeyInput.trim();
+    if (!key || key === KEY_MASK) {
+      showNotification('Paste a key in the field to test it (not the masked placeholder).', 'error');
+      return;
+    }
+    setTestingProviderKey((t) => ({ ...t, tavily: true }));
+    try {
+      const r = await testProviderApiKey('tavily', key);
+      if (r.success) {
+        showNotification(r.message || 'Tavily key is valid.', 'success');
+      } else {
+        showNotification(r.error || 'Test failed', 'error');
+      }
+    } finally {
+      setTestingProviderKey((t) => ({ ...t, tavily: false }));
+    }
+  };
+
+  const handleClearTavilyKey = async () => {
+    if (!window.confirm('Remove the stored Tavily API key from settings/tools?')) {
+      return;
+    }
+    const r = await clearSettingsField('tools', 'tavilyApiKey');
+    if (r.success) {
+      showNotification('Tavily key removed.', 'success');
+      setToolsSettings((prev) => ({
+        ...prev,
+        tavilyConfigured: false,
+        tavilyKeyInput: ''
+      }));
+      await loadToolsSettings();
+    } else {
+      showNotification(`Failed to remove key: ${r.error}`, 'error');
+    }
+  };
+
   const handleLogout = async () => {
     try {
       await signOutUser();
@@ -881,17 +1065,47 @@ const AdminDashboard = ({ user, onBack }) => {
     }
   };
 
-  const handleTopupCredits = async (userId, amount = 100) => {
+  const handleTopupCredits = async (userId, defaultAmount = 100) => {
+    const raw = window.prompt('Credits to add', String(defaultAmount));
+    if (raw === null) return;
+    const amount = parseInt(raw, 10);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      showNotification('Enter a positive whole number of credits.', 'error');
+      return;
+    }
     try {
       const result = await addCredits(userId, amount);
       if (result.success) {
-        showNotification(`Successfully added ${amount} credits to user. New balance: ${result.newCredits}`, 'success');
-        loadUsers(); // Reload to show updated credits
+        showNotification(`Added ${amount} credits. New balance: ${result.newCredits}`, 'success');
+        loadUsers();
+        onCreditsGranted?.(userId);
       } else {
         showNotification(`Failed to add credits: ${result.error}`, 'error');
       }
     } catch (error) {
       showNotification('Error adding credits', 'error');
+    }
+  };
+
+  const handleSetCreditBalance = async (userId, currentBalance) => {
+    const raw = window.prompt('Set credit balance to (exact amount)', String(currentBalance ?? 0));
+    if (raw === null) return;
+    const n = parseInt(raw, 10);
+    if (!Number.isFinite(n) || n < 0) {
+      showNotification('Enter zero or a positive whole number.', 'error');
+      return;
+    }
+    try {
+      const result = await setUserCreditCurrent(userId, n);
+      if (result.success) {
+        showNotification(`Credits set to ${result.newCurrent}`, 'success');
+        loadUsers();
+        onCreditsGranted?.(userId);
+      } else {
+        showNotification(`Failed to set credits: ${result.error}`, 'error');
+      }
+    } catch (error) {
+      showNotification('Error setting credits', 'error');
     }
   };
 
@@ -1236,6 +1450,68 @@ const AdminDashboard = ({ user, onBack }) => {
     }
   };
 
+  const handleSyncFalModels = async () => {
+    setSyncingFalModels(true);
+    try {
+      showNotification('Syncing Fal.ai models...', 'success');
+      const rawKey = systemSettings.falKeyInput.trim();
+      const apiKeyForFetch = rawKey && rawKey !== KEY_MASK ? rawKey : undefined;
+      const result = await fetchFalModelsForAdmin(apiKeyForFetch);
+      if (!result.success) {
+        showNotification(result.error || 'Failed to fetch Fal models', 'error');
+        return;
+      }
+      const falModels = result.models || [];
+      if (falModels.length === 0) {
+        showNotification('No Fal models returned. Check your API key and try again.', 'error');
+        return;
+      }
+      let savedCount = 0;
+      let updatedCount = 0;
+
+      for (const model of falModels) {
+        const sanitizedId = model.id.replace(/\//g, '-').replace(/[^a-zA-Z0-9-]/g, '-');
+        const existingModel = adminData.models.find((m) => m.id === sanitizedId);
+        const modelType = model.type || 'image';
+
+        const modelData = {
+          id: sanitizedId,
+          originalId: model.id,
+          name: model.name,
+          description: model.description || model.category || '',
+          provider: 'fal',
+          type: modelType,
+          source: 'fal',
+          status: existingModel?.status || 'inactive',
+          isActive: existingModel?.isActive !== undefined ? existingModel.isActive : false,
+          updatedAt: new Date()
+        };
+
+        if (existingModel) {
+          await updateModel(sanitizedId, modelData);
+          updatedCount++;
+        } else {
+          await createModel({ ...modelData, createdAt: new Date() });
+          savedCount++;
+        }
+      }
+
+      const textCount = falModels.filter((m) => m.type === 'text').length;
+      const imageCount = falModels.filter((m) => m.type === 'image').length;
+      const videoCount = falModels.filter((m) => m.type === 'video').length;
+      const audioCount = falModels.filter((m) => m.type === 'audio').length;
+      showNotification(
+        `Synced ${falModels.length} Fal models (${savedCount} new, ${updatedCount} updated, ${textCount} text, ${imageCount} image, ${videoCount} video, ${audioCount} audio)`,
+        'success'
+      );
+      loadModels();
+    } catch (error) {
+      showNotification('Failed to sync Fal models: ' + error.message, 'error');
+    } finally {
+      setSyncingFalModels(false);
+    }
+  };
+
   const handleEditSubscription = async (subscription) => {
     const plans = await getSubscriptionPlans();
     const planNames = Object.keys(plans).join(', ');
@@ -1485,6 +1761,7 @@ const AdminDashboard = ({ user, onBack }) => {
             { id: 'subscriptions', icon: Crown, label: 'Subscriptions' },
             { id: 'payments', icon: CreditCard, label: 'Payments' },
             { id: 'analytics', icon: BarChart3, label: 'Analytics' },
+            { id: 'tools', icon: Wrench, label: 'Tools' },
             { id: 'settings', icon: Settings, label: 'Settings' }
           ].map((section) => {
             const Icon = section.icon;
@@ -1547,6 +1824,7 @@ const AdminDashboard = ({ user, onBack }) => {
                   {activeSection === 'subscriptions' && 'Subscription Management'}
                   {activeSection === 'payments' && 'Payment Management'}
                   {activeSection === 'analytics' && 'Analytics'}
+                  {activeSection === 'tools' && 'Tools'}
                   {activeSection === 'settings' && 'System Settings'}
                 </h2>
                 <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
@@ -1801,16 +2079,30 @@ const AdminDashboard = ({ user, onBack }) => {
                             </span>
                           </td>
                           <td className="px-4 py-4 whitespace-nowrap">
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
                               <span className="text-sm font-medium text-gray-900 dark:text-white">
                                 {user.credits?.current || 0}
                               </span>
+                              {user.id === adminUserId && (
+                                <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-blue-800 dark:bg-blue-900/40 dark:text-blue-200">
+                                  You
+                                </span>
+                              )}
                               <button
+                                type="button"
                                 onClick={() => handleTopupCredits(user.id, 100)}
                                 className="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300"
-                                title="Add 100 credits"
+                                title="Add credits (prompt for amount)"
                               >
                                 <Coins className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleSetCreditBalance(user.id, user.credits?.current ?? 0)}
+                                className="text-amber-600 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-300"
+                                title="Set exact credit balance"
+                              >
+                                <Wallet className="h-4 w-4" />
                               </button>
                             </div>
                           </td>
@@ -1994,6 +2286,14 @@ const AdminDashboard = ({ user, onBack }) => {
                     <span>Sync Gemini</span>
                   </button>
                   <button
+                    onClick={handleSyncFalModels}
+                    disabled={syncingFalModels}
+                    className="flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700 disabled:opacity-60 transition-colors text-sm"
+                  >
+                    <RefreshCw className={`h-4 w-4 ${syncingFalModels ? 'animate-spin' : ''}`} />
+                    <span>{syncingFalModels ? 'Syncing Fal…' : 'Sync Fal'}</span>
+                  </button>
+                  <button
                     onClick={() => setModals(prev => ({ ...prev, model: { open: true, editing: null } }))}
                     className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
                   >
@@ -2036,6 +2336,7 @@ const AdminDashboard = ({ user, onBack }) => {
                   <option value="">All Providers</option>
                   <option value="openai">OpenAI</option>
                   <option value="gemini">Gemini</option>
+                  <option value="fal">Fal</option>
                 </select>
                 <select
                   value={filters.modelStatus}
@@ -2914,6 +3215,104 @@ const AdminDashboard = ({ user, onBack }) => {
             </div>
           )}
 
+          {/* Tools (Tavily, etc.) */}
+          {activeSection === 'tools' && (
+            <div className="space-y-6">
+              <div className="bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800 rounded-lg p-4 flex gap-3">
+                <Wrench className="h-5 w-5 text-violet-700 dark:text-violet-400 shrink-0 mt-0.5" />
+                <div className="text-sm text-violet-900 dark:text-violet-100/90">
+                  <p className="font-medium text-violet-950 dark:text-violet-50 mb-1">Workspace tools</p>
+                  <p className="text-violet-800 dark:text-violet-200/90">
+                    Keys are stored in{' '}
+                    <code className="px-1 py-0.5 rounded bg-violet-100/80 dark:bg-violet-900/50 font-mono text-xs">
+                      settings/tools
+                    </code>{' '}
+                    for server-side use when cards enable tool integrations (e.g. web search). Users can add their own
+                    Tavily key in Profile → Tools to override the shared key when supported.
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6 max-w-xl">
+                <div className="flex items-start justify-between gap-4 mb-4">
+                  <div className="flex items-center gap-2">
+                    <Key className="h-5 w-5 text-gray-500 dark:text-gray-400" />
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Tavily (web search)</h3>
+                  </div>
+                  <span
+                    className={`text-xs font-medium px-2 py-1 rounded-full ${
+                      toolsSettings.tavilyConfigured
+                        ? 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300'
+                        : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+                    }`}
+                  >
+                    {toolsSettings.tavilyConfigured ? 'Key on file' : 'Not set'}
+                  </span>
+                </div>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                  Used for research / search tool calls when templates or cells reference Tavily. Get a key at{' '}
+                  <a
+                    href="https://tavily.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    tavily.com
+                  </a>
+                  .
+                </p>
+                {toolsSettings.tavilyUpdatedAt && (
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mb-3">
+                    Last updated: {formatFirestoreTime(toolsSettings.tavilyUpdatedAt) || '—'}
+                  </p>
+                )}
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                  API key
+                </label>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  value={toolsSettings.tavilyKeyInput}
+                  onChange={(e) =>
+                    setToolsSettings((prev) => ({ ...prev, tavilyKeyInput: e.target.value }))
+                  }
+                  placeholder={toolsSettings.tavilyConfigured ? 'Enter a new key to replace' : 'tvly-...'}
+                  className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm font-mono mb-4"
+                  disabled={toolsSettings.loading}
+                />
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleTestTavilyKey}
+                    disabled={toolsSettings.loading || testingProviderKey.tavily}
+                    className="px-4 py-2 border border-violet-300 dark:border-violet-600 text-violet-700 dark:text-violet-300 hover:bg-violet-50 dark:hover:bg-violet-900/20 disabled:opacity-50 text-sm rounded-lg transition-colors inline-flex items-center gap-1.5"
+                  >
+                    <TestTube className="h-4 w-4" />
+                    {testingProviderKey.tavily ? 'Testing…' : 'Test key'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveTavilyKey}
+                    disabled={toolsSettings.loading}
+                    className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
+                  >
+                    Save key
+                  </button>
+                  {toolsSettings.tavilyConfigured && (
+                    <button
+                      type="button"
+                      onClick={handleClearTavilyKey}
+                      disabled={toolsSettings.loading}
+                      className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 text-gray-800 dark:text-gray-200 text-sm rounded-lg transition-colors"
+                    >
+                      Remove key
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Settings Section */}
           {activeSection === 'settings' && (
             <div className="space-y-6">
@@ -2930,16 +3329,21 @@ const AdminDashboard = ({ user, onBack }) => {
                     <code className="px-1 py-0.5 rounded bg-amber-100/80 dark:bg-amber-900/50 font-mono text-xs">
                       admin/gemini
                     </code>{' '}
+                    /{' '}
+                    <code className="px-1 py-0.5 rounded bg-amber-100/80 dark:bg-amber-900/50 font-mono text-xs">
+                      admin/fal
+                    </code>{' '}
                     and{' '}
                     <code className="font-mono text-xs">settings/openai</code> /{' '}
-                    <code className="font-mono text-xs">settings/gemini</code> so the Node server (which reads{' '}
+                    <code className="font-mono text-xs">settings/gemini</code> /{' '}
+                    <code className="font-mono text-xs">settings/fal</code> so the Node server (which reads{' '}
                     <code className="font-mono text-xs">settings/*</code> first) always sees the key. Env vars are still
                     a fallback when both are empty.
                   </p>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
                   <div className="flex items-start justify-between gap-4 mb-4">
                     <div className="flex items-center gap-2">
@@ -3069,6 +3473,76 @@ const AdminDashboard = ({ user, onBack }) => {
                       <button
                         type="button"
                         onClick={handleClearGeminiKey}
+                        disabled={systemSettings.loading}
+                        className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 text-gray-800 dark:text-gray-200 text-sm rounded-lg transition-colors"
+                      >
+                        Remove key
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+                  <div className="flex items-start justify-between gap-4 mb-4">
+                    <div className="flex items-center gap-2">
+                      <Key className="h-5 w-5 text-gray-500 dark:text-gray-400" />
+                      <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Fal.ai</h3>
+                    </div>
+                    <span
+                      className={`text-xs font-medium px-2 py-1 rounded-full ${
+                        systemSettings.falConfigured
+                          ? 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300'
+                          : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+                      }`}
+                    >
+                      {systemSettings.falConfigured ? 'Key on file' : 'Not set'}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                    Used for listing Fal endpoints and server-side Fal calls. Model sync uses this key unless you paste a
+                    different key below.
+                  </p>
+                  {systemSettings.falUpdatedAt && (
+                    <p className="text-xs text-gray-400 dark:text-gray-500 mb-3">
+                      Last updated: {formatFirestoreTime(systemSettings.falUpdatedAt) || '—'}
+                    </p>
+                  )}
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                    New API key
+                  </label>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={systemSettings.falKeyInput}
+                    onChange={(e) =>
+                      setSystemSettings((prev) => ({ ...prev, falKeyInput: e.target.value }))
+                    }
+                    placeholder={systemSettings.falConfigured ? 'Enter a new key to replace' : 'Fal API key…'}
+                    className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm font-mono mb-4"
+                    disabled={systemSettings.loading}
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleTestFalKey}
+                      disabled={systemSettings.loading || testingProviderKey.fal}
+                      className="px-4 py-2 border border-blue-300 dark:border-blue-600 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50 text-sm rounded-lg transition-colors inline-flex items-center gap-1.5"
+                    >
+                      <TestTube className="h-4 w-4" />
+                      {testingProviderKey.fal ? 'Testing…' : 'Test key'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveFalKey}
+                      disabled={systemSettings.loading}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
+                    >
+                      Save key
+                    </button>
+                    {systemSettings.falConfigured && (
+                      <button
+                        type="button"
+                        onClick={handleClearFalKey}
                         disabled={systemSettings.loading}
                         className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 text-gray-800 dark:text-gray-200 text-sm rounded-lg transition-colors"
                       >
@@ -3408,6 +3882,7 @@ const ModelModal = ({ model, onClose, onSave }) => {
             >
               <option value="openai">OpenAI</option>
               <option value="gemini">Gemini</option>
+              <option value="fal">Fal</option>
             </select>
           </div>
           

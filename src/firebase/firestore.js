@@ -82,6 +82,53 @@ export async function updateProject(userId, projectId, projectData) {
   }
 }
 
+/**
+ * User-scoped templates (orchestrator-generated and saved under the user's account)
+ */
+export async function getUserTemplates(userId) {
+  try {
+    if (!userId) return { success: true, data: [] };
+    const snapshot = await getDocs(collection(db, 'users', userId, 'templates'));
+    const templates = [];
+    snapshot.forEach((d) => {
+      templates.push({ id: d.id, ...d.data() });
+    });
+    templates.sort((a, b) => {
+      const ta = a.createdAt?.toMillis?.() ?? a.updatedAt?.toMillis?.() ?? 0;
+      const tb = b.createdAt?.toMillis?.() ?? b.updatedAt?.toMillis?.() ?? 0;
+      return tb - ta;
+    });
+    return { success: true, data: templates };
+  } catch (error) {
+    console.error('Error getting user templates:', error);
+    return { success: false, error: error.message, data: [] };
+  }
+}
+
+export async function createUserTemplate(userId, templateData) {
+  try {
+    if (!userId) {
+      return { success: false, error: 'User id required' };
+    }
+    const templateId = templateData.id;
+    const base = {
+      ...templateData,
+      ownerId: userId,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    };
+    if (templateId) {
+      const templateRef = doc(db, 'users', userId, 'templates', templateId);
+      await setDoc(templateRef, base);
+      return { success: true, id: templateId };
+    }
+    const docRef = await addDoc(collection(db, 'users', userId, 'templates'), base);
+    return { success: true, id: docRef.id };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
 export async function deleteProject(userId, projectId) {
   try {
     // Get all sheets in the project first
@@ -814,6 +861,31 @@ export async function updateUserProfile(userId, profileData) {
       { merge: true }
     );
     return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Admin: set a user's `credits.current` without replacing the whole `credits` map
+ * (preserves nextReset, lastReset, etc.). Admins may target any uid including their own.
+ */
+export async function setUserCreditCurrent(userId, newCurrent) {
+  try {
+    const n = Number(newCurrent);
+    if (!Number.isFinite(n) || n < 0) {
+      return { success: false, error: 'Invalid amount' };
+    }
+    const ref = doc(db, 'users', userId);
+    const userDoc = await getDoc(ref);
+    if (!userDoc.exists()) {
+      return { success: false, error: 'User not found' };
+    }
+    await updateDoc(ref, {
+      'credits.current': n,
+      updatedAt: serverTimestamp()
+    });
+    return { success: true, newCurrent: n };
   } catch (error) {
     return { success: false, error: error.message };
   }

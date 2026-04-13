@@ -44,7 +44,8 @@ service cloud.firestore {
       // Users can only read their own user document; admins can read any.
       allow read: if isOwner(userId) || isAdmin();
       allow create: if isAuthenticated() && request.auth.uid == userId;
-      // Owners may update *non-privileged* profile fields only. Admins may update anything.
+      // Owners may update *non-privileged* profile fields only. Admins may update anything
+      // (including `credits`) for any userId — including their own uid — for support/top-ups.
       allow update: if isAdmin() || (isOwner(userId) && ownerIsNotChangingRestrictedUserFields());
       allow delete: if isAdmin() || isOwner(userId);
 
@@ -66,6 +67,11 @@ service cloud.firestore {
             }
           }
         }
+      }
+
+      // User-owned workflow templates (orchestrator + "My templates")
+      match /templates/{templateId} {
+        allow read, create, update, delete: if isOwner(userId) || isAdmin();
       }
     }
     

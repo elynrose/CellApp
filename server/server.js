@@ -30,7 +30,14 @@ if (process.env.STRIPE_SECRET_KEY) {
 }
 
 // Firebase server integration for cloud deployment
-const { initializeFirebase, getOpenAIApiKey, getGeminiApiKey, getActiveModelsFromFirebase, diagnoseFirebaseModels } = require('./firebase-server-config');
+const {
+  initializeFirebase,
+  getOpenAIApiKey,
+  getGeminiApiKey,
+  getFalApiKey,
+  getActiveModelsFromFirebase,
+  diagnoseFirebaseModels
+} = require('./firebase-server-config');
 const admin = require('firebase-admin');
 
 /**
@@ -539,9 +546,132 @@ async function probeProviderApiKey(provider, apiKey, baseUrl) {
       if (status === 401 || status === 403) throw new Error('Invalid DeepSeek API key.');
       throw new Error(`DeepSeek check failed (${status}): ${body.substring(0, 280)}`);
     }
+    case 'tavily': {
+      if (!k) throw new Error('API key is required');
+      try {
+        await postHttpsOrHttpJson(
+          'https://api.tavily.com/search',
+          { api_key: k, query: 'ping', max_results: 1 },
+          {
+            'User-Agent': 'Cellulai-KeyProbe/1.0 (https://github.com/elynrose/CellApp)'
+          }
+        );
+        return { ok: true, message: 'Tavily key is valid (search succeeded).' };
+      } catch (e) {
+        const msg = e?.message || String(e);
+        if (/401|403|invalid|Unauthorized/i.test(msg)) {
+          throw new Error('Invalid Tavily API key.');
+        }
+        throw new Error(`Tavily check failed: ${msg.substring(0, 280)}`);
+      }
+    }
     default:
       throw new Error(`Unknown provider: ${provider}`);
   }
+}
+
+function inferFalModelTypeFromMetadata(category, endpointId) {
+  const c = String(category || '').toLowerCase();
+  const e = String(endpointId || '').toLowerCase();
+  if (
+    c.includes('video') ||
+    e.includes('text-to-video') ||
+    e.includes('image-to-video') ||
+    (e.includes('/video') && !e.includes('image-to-video')) ||
+    e.includes('wan/') ||
+    e.includes('kling') ||
+    e.includes('minimax/video')
+  ) {
+    return 'video';
+  }
+  if (
+    c.includes('audio') ||
+    c.includes('speech') ||
+    c.includes('music') ||
+    c.includes('tts') ||
+    e.includes('/audio') ||
+    e.includes('tts') ||
+    e.includes('speech')
+  ) {
+    return 'audio';
+  }
+  if (
+    c.includes('llm') ||
+    c === 'text' ||
+    (c.includes('text') && (c.includes('completion') || c.includes('chat'))) ||
+    e.includes('/llm') ||
+    e.includes('language-model')
+  ) {
+    return 'text';
+  }
+  if (
+    c.includes('image') ||
+    c.includes('text-to-image') ||
+    c.includes('image-to-image') ||
+    e.includes('flux') ||
+    e.includes('sdxl') ||
+    e.includes('text-to-image') ||
+    e.includes('/image')
+  ) {
+    return 'image';
+  }
+  if (c.includes('3d') || e.includes('3d')) return 'image';
+  return 'image';
+}
+
+/**
+ * Paginate https://api.fal.ai/v1/models (active endpoints).
+ */
+async function fetchAllFalModelsList(apiKey) {
+  const k = normalizeApiKeyString(apiKey);
+  if (!k) {
+    throw new Error('Fal API key is required.');
+  }
+  const headers = { Authorization: `Key ${k}` };
+  const out = [];
+  let cursor = null;
+  for (let page = 0; page < 80; page++) {
+    const q = new URLSearchParams({ limit: '100', status: 'active' });
+    if (cursor) q.set('cursor', cursor);
+    const apiUrl = `https://api.fal.ai/v1/models?${q.toString()}`;
+    const { status, body } = await httpOrHttpsGet(apiUrl, headers);
+    if (status !== 200) {
+      throw new Error(`Fal models API returned ${status}: ${body.substring(0, 500)}`);
+    }
+    let j;
+    try {
+      j = JSON.parse(body);
+    } catch {
+      throw new Error('Invalid JSON from Fal models API');
+    }
+    const models = j.models || [];
+    for (const m of models) {
+      const endpointId = m.endpoint_id;
+      if (!endpointId) continue;
+      const meta = m.metadata || {};
+      const category = meta.category || '';
+      const type = inferFalModelTypeFromMetadata(category, endpointId);
+      const name =
+        meta.display_name ||
+        endpointId
+          .split('/')
+          .filter(Boolean)
+          .slice(-2)
+          .join('/') ||
+        endpointId;
+      out.push({
+        id: endpointId,
+        name,
+        description: String(meta.description || category || '').slice(0, 600),
+        provider: 'fal',
+        type,
+        category
+      });
+    }
+    cursor = j.next_cursor || j.nextCursor || null;
+    if (!cursor) break;
+  }
+  return out;
 }
 
 // Local development configuration
@@ -2146,6 +2276,48 @@ window.storage = storage;`;
           res.setHeader('Content-Type', 'application/json');
           res.setHeader('Access-Control-Allow-Origin', '*');
           res.end(JSON.stringify({ success: false, error: err.message || String(err) }));
+        }
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/fal/fetch-models') {
+      if (!verifiedUserId) {
+        res.statusCode = 401;
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.end(JSON.stringify({ error: 'Sign in to fetch Fal models.' }));
+        return;
+      }
+      let body = '';
+      req.on('data', (chunk) => {
+        body += chunk;
+        if (body.length > 16384) req.connection.destroy();
+      });
+      req.on('end', async () => {
+        try {
+          let data = {};
+          try {
+            data = JSON.parse(body || '{}');
+          } catch {
+            res.statusCode = 400;
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.end(JSON.stringify({ error: 'Invalid JSON' }));
+            return;
+          }
+          const fromBody = normalizeApiKeyString(data.apiKey);
+          const fromStore = fromBody || (await getFalApiKey());
+          const models = await fetchAllFalModelsList(fromStore);
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.end(JSON.stringify({ models }));
+        } catch (err) {
+          res.statusCode = 400;
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.end(JSON.stringify({ error: err.message || String(err) }));
         }
       });
       return;

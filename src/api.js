@@ -256,6 +256,38 @@ export async function testProviderApiKey(provider, apiKey, options = {}) {
 }
 
 /**
+ * List Fal.ai models (paginated on the server). Uses body apiKey when provided, otherwise server key from Firestore/env.
+ */
+export async function fetchFalModelsForAdmin(apiKey) {
+  try {
+    const API_BASE_URL = getApiBaseUrl();
+    const payload = {};
+    if (typeof apiKey === 'string' && apiKey.trim()) {
+      payload.apiKey = apiKey.trim();
+    }
+    const response = await fetch(`${API_BASE_URL}/api/fal/fetch-models`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(await getAuthHeaders()),
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return {
+        success: false,
+        error: data.error || data.message || `Request failed (${response.status})`,
+        models: [],
+      };
+    }
+    return { success: true, models: data.models || [] };
+  } catch (error) {
+    return { success: false, error: error.message, models: [] };
+  }
+}
+
+/**
  * Get available AI models
  */
 export async function getAvailableModels() {
@@ -394,6 +426,26 @@ export function getModelType(modelId) {
   if (!modelId) return 'text';
   
   const id = modelId.toLowerCase();
+
+  if (id.includes('fal-ai/') || id.includes('/fal/') || id.startsWith('fal:')) {
+    if (
+      id.includes('video') ||
+      id.includes('image-to-video') ||
+      id.includes('text-to-video') ||
+      id.includes('/veo') ||
+      id.includes('kling') ||
+      id.includes('wan/')
+    ) {
+      return 'video';
+    }
+    if (id.includes('tts') || id.includes('speech') || id.includes('/audio') || id.includes('music')) {
+      return 'audio';
+    }
+    if (id.includes('llm') || id.includes('language-model') || id.includes('/llm')) {
+      return 'text';
+    }
+    return 'image';
+  }
   
   // Image generation models (OpenAI DALL-E, Gemini Imagen)
   if (id.includes('dall-e') || id.includes('imagen')) {

@@ -11,6 +11,11 @@ import { optimizePrompt, shouldOptimizePrompt } from '../utils/promptOptimizer';
 import { uploadImageFromUrl, uploadVideoFromUrl, uploadAudioFromUrl } from '../firebase/storage';
 import { getCreditCost, hasEnoughCredits, getPlanById } from '../services/subscriptions';
 import { inferProviderFromModel } from '../utils/modelProvider';
+import {
+  getAgentOrchestrationSuffix,
+  parseOrchestratorReportFromOutput,
+  defaultMediaAgentReport
+} from './agentOrchestration';
 
 /**
  * Get format instructions based on output format setting
@@ -372,9 +377,13 @@ export async function runCell({
   currentSheet,
   onProgress,
   getLatestCells = null, // Optional function to get latest cell state
-  runningCellsSet = null // Optional Set of currently running cell IDs
+  runningCellsSet = null, // Optional Set of currently running cell IDs
+  executionOptions = {}
 }) {
   try {
+    const useOrchestration =
+      Boolean(executionOptions.useAgentOrchestration) && !cell.skipAgentOrchestration;
+
     if (onProgress) onProgress({ status: 'resolving', cellId });
 
     // Create a pending generation record to track this run
@@ -386,7 +395,8 @@ export async function runCell({
       temperature: cell.temperature ?? 0.7,
       type: getModelType(cell.model || 'gpt-3.5-turbo'),
       status: 'pending', // Will be updated to 'running' then 'completed' or 'error'
-      timestamp: new Date()
+      timestamp: new Date(),
+      useAgentOrchestration: useOrchestration
     };
 
     // NOTE: We no longer wait for dependencies to complete
@@ -631,6 +641,21 @@ export async function runCell({
         finalPrompt = `${finalPrompt}\n\nIMPORTANT: Your response must be exactly ${characterLimit} characters or less. Generate your complete response within this character limit. Do not exceed it.`;
     }
 
+    // Per-card structured report (research/plan/review + JSON) for workspace agent goal loop
+    if (useOrchestration && getModelType(model) === 'text') {
+      let orchExtra = '';
+      const main = executionOptions.workspaceMainGoal && String(executionOptions.workspaceMainGoal).trim();
+      if (main) {
+        orchExtra += `\n\n## Workspace main goal\n${main}\n`;
+      }
+      const directive =
+        executionOptions.orchestratorDirective && String(executionOptions.orchestratorDirective).trim();
+      if (directive) {
+        orchExtra += `\n\n## Orchestrator instruction (this run)\n${directive}\n`;
+      }
+      finalPrompt = `${finalPrompt}${orchExtra}${getAgentOrchestrationSuffix()}`;
+    }
+
     // Check user credits before generating
     const subscriptionInfo = await getUserSubscription(userId);
     if (!subscriptionInfo.success) {
@@ -804,6 +829,15 @@ export async function runCell({
 
     let output = result.output;
 
+    let agentOrchestratorReport = null;
+    if (useOrchestration && modelType === 'text' && typeof output === 'string') {
+      const parsed = parseOrchestratorReportFromOutput(output);
+      agentOrchestratorReport = parsed.parsed;
+      output = parsed.displayOutput != null ? parsed.displayOutput : output;
+    } else if (useOrchestration && modelType !== 'text') {
+      agentOrchestratorReport = defaultMediaAgentReport(modelType);
+    }
+
     // Note: Character limit is enforced via max_tokens and prompt instructions
     // No post-generation truncation - the AI should generate within the limit
 
@@ -923,7 +957,8 @@ export async function runCell({
       temperature,
       type: getModelType(model),
       status: 'completed', // Status: 'pending', 'running', 'completed', 'error'
-      timestamp: pendingGeneration.timestamp // Keep original timestamp
+      timestamp: pendingGeneration.timestamp, // Keep original timestamp
+      ...(agentOrchestratorReport != null ? { agentOrchestratorReport } : {})
     };
     
     // Log if we're saving with Firebase URL or original URL
@@ -940,7 +975,8 @@ export async function runCell({
       model,
       temperature,
       generations: [...(cell.generations || []), generation],
-      updatedAt: new Date()
+      updatedAt: new Date(),
+      ...(agentOrchestratorReport != null ? { agentOrchestratorReport } : {})
     };
 
     // Save to Firestore
@@ -955,7 +991,8 @@ export async function runCell({
       success: true,
       cellId,
       output,
-      generation
+      generation,
+      agentOrchestratorReport: agentOrchestratorReport || null
     };
   } catch (error) {
     console.error(`Error running cell ${cellId}:`, error);
@@ -1379,11 +1416,18 @@ export async function pollJobStatus({
       if (lastGeneration && lastGeneration.jobId === jobId) {
         lastGeneration.status = 'completed';
         lastGeneration.output = output; // This is now the Firebase URL if upload succeeded
+        if (lastGeneration.useAgentOrchestration) {
+          const mt = getModelType(cell.model || lastGeneration.model || '');
+          lastGeneration.agentOrchestratorReport = defaultMediaAgentReport(mt);
+        }
       }
 
       updatedCell.output = output; // This is now the Firebase URL if upload succeeded
       updatedCell.status = 'completed';
       updatedCell.generations = generations;
+      if (lastGeneration?.useAgentOrchestration && lastGeneration.agentOrchestratorReport) {
+        updatedCell.agentOrchestratorReport = lastGeneration.agentOrchestratorReport;
+      }
 
       // Log if we're saving with Firebase URL or original URL
       if (output && output.includes('firebasestorage.googleapis.com')) {

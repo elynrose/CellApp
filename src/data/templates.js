@@ -810,6 +810,11 @@ export const TEMPLATES = {
         x: 400,
         y: 100
       }
+    ],
+    connections: [
+      { source: 'A1', target: 'B1' },
+      { source: 'B1', target: 'C1' },
+      { source: 'A1', target: 'B2' }
     ]
   },
 

@@ -214,6 +214,42 @@ async function getGeminiApiKey() {
 }
 
 /**
+ * Get Fal.ai API key from Firebase (settings/fal, admin/fal) or env FAL_KEY / FAL_API_KEY.
+ */
+async function getFalApiKey() {
+  try {
+    if (!firestore) {
+      await initializeFirebase();
+    }
+
+    if (!firestore) {
+      return process.env.FAL_KEY || process.env.FAL_API_KEY || '';
+    }
+
+    const settingsDoc = await firestore.collection('settings').doc('fal').get();
+    if (settingsDoc.exists) {
+      const apiKey = settingsDoc.data()?.apiKey;
+      if (apiKey) {
+        return apiKey;
+      }
+    }
+
+    const adminFal = await firestore.collection('admin').doc('fal').get();
+    if (adminFal.exists) {
+      const apiKey = adminFal.data()?.apiKey;
+      if (apiKey) {
+        return apiKey;
+      }
+    }
+
+    return process.env.FAL_KEY || process.env.FAL_API_KEY || '';
+  } catch (error) {
+    console.error('❌ Error getting Fal API key from Firebase:', error);
+    return process.env.FAL_KEY || process.env.FAL_API_KEY || '';
+  }
+}
+
+/**
  * Get active models from Firebase
  */
 async function getActiveModelsFromFirebase() {
@@ -440,6 +476,7 @@ module.exports = {
   initializeFirebase,
   getOpenAIApiKey,
   getGeminiApiKey,
+  getFalApiKey,
   getActiveModelsFromFirebase,
   saveGenerationToFirebase,
   diagnoseFirebaseModels

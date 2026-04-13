@@ -155,6 +155,43 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { getGenerations, deleteGeneration, deleteAllGenerations } from '../firebase/firestore';
 import { formatOutput } from '../services/cellExecution';
 
+/**
+ * Same generation is stored in the `generations` subcollection and mirrored on `cell.generations`.
+ * Merging both lists without deduping shows every run twice.
+ */
+function generationDedupeFingerprint(g) {
+    const job = g?.jobId != null && g.jobId !== '' ? String(g.jobId) : '';
+    const out = String(g?.output ?? '').trim();
+    const pr = String(g?.prompt ?? g?.input ?? '').trim();
+    return `${job}|${out.slice(0, 12000)}|${pr.slice(0, 6000)}`;
+}
+
+function mergeGenerationHistory(subcollection, embedded) {
+    const primary = Array.isArray(subcollection) ? subcollection : [];
+    const secondary = Array.isArray(embedded) ? embedded : [];
+    const seen = new Set();
+    const out = [];
+    for (const g of primary) {
+        const fp = generationDedupeFingerprint(g);
+        if (!seen.has(fp)) {
+            seen.add(fp);
+            out.push(g);
+        }
+    }
+    for (const g of secondary) {
+        const fp = generationDedupeFingerprint(g);
+        if (!seen.has(fp)) {
+            seen.add(fp);
+            out.push(g);
+        }
+    }
+    return out.sort((a, b) => {
+        const timeA = a.timestamp?.toDate ? a.timestamp.toDate() : new Date(a.timestamp || a.createdAt);
+        const timeB = b.timestamp?.toDate ? b.timestamp.toDate() : new Date(b.timestamp || b.createdAt);
+        return timeB - timeA;
+    });
+}
+
 const HistoryModal = ({ isOpen, onClose, cell, onRestore, userId, projectId, sheetId }) => {
     const [history, setHistory] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -188,15 +225,11 @@ const HistoryModal = ({ isOpen, onClose, cell, onRestore, userId, projectId, she
         try {
             const result = await getGenerations(userId, projectId, sheetId, cell.cell_id);
             if (result.success) {
-                // Combine with cell.generations if available (for backward compatibility)
-                const allGenerations = [
-                    ...(result.generations || []),
-                    ...(cell.generations || [])
-                ].sort((a, b) => {
-                    const timeA = a.timestamp?.toDate ? a.timestamp.toDate() : new Date(a.timestamp || a.createdAt);
-                    const timeB = b.timestamp?.toDate ? b.timestamp.toDate() : new Date(b.timestamp || b.createdAt);
-                    return timeB - timeA;
-                });
+                // Prefer subcollection; merge embedded only for legacy data — dedupe because both mirror the same runs
+                const allGenerations = mergeGenerationHistory(
+                    result.generations || [],
+                    cell.generations || []
+                );
                 setHistory(allGenerations);
             } else {
                 setError(result.error || 'Failed to fetch history');

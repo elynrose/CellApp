@@ -1,12 +1,24 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { flushSync } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { onAuthStateChange } from './firebase/auth';
-import { getProjects, createProject, getSheets, createSheet, updateSheet, getSheetCells, saveCell, getActiveModels, deleteCell, getUserSubscription } from './firebase/firestore';
-import { runOrchestratorHandoffPipeline } from './services/orchestrator';
+import {
+  getProjects,
+  createProject,
+  updateProject,
+  getSheets,
+  createSheet,
+  updateSheet,
+  getSheetCells,
+  saveCell,
+  getActiveModels,
+  deleteCell,
+  getUserSubscription
+} from './firebase/firestore';
+import { runOrchestratorHandoffPipeline, planAgentGoalStep } from './services/orchestrator';
 import { runCell, pollJobStatus, cancelPolling } from './services/cellExecution';
 import { parseDependencies, findDependentCells } from './utils/dependencies';
-import { getModelType } from './api';
+import { getModelType, saveConnection } from './api';
 import Canvas from './components/Canvas';
 import { Plus, Box, Grid, Trash2, Play, LogOut, User, Shield, Crown, X, AlertCircle, Sparkles, Check, Edit2, GripVertical, ChevronDown, FolderOpen, Copy, FileText, Download, Workflow, Menu } from 'lucide-react';
 import jsPDF from 'jspdf';
@@ -52,6 +64,17 @@ function App() {
   const [activeSheet, setActiveSheet] = useState(null);
   const [cells, setCells] = useState({}); // Changed to object for easier lookup
   const [connections, setConnections] = useState([]);
+  const connectionsSaveTimerRef = useRef(null);
+  const projectTouchTimerRef = useRef(null);
+
+  const scheduleProjectTouch = useCallback(() => {
+    if (!user?.uid || !currentProjectId) return;
+    if (projectTouchTimerRef.current) clearTimeout(projectTouchTimerRef.current);
+    projectTouchTimerRef.current = setTimeout(() => {
+      projectTouchTimerRef.current = null;
+      updateProject(user.uid, currentProjectId, {}).catch(() => {});
+    }, 3500);
+  }, [user?.uid, currentProjectId]);
   const [availableModels, setAvailableModels] = useState([]);
   const [defaultModel, setDefaultModel] = useState('gpt-3.5-turbo');
   const defaultTemperature = 0.7;
@@ -74,6 +97,8 @@ function App() {
   const [orchestratorHandoffLog, setOrchestratorHandoffLog] = useState([]);
   /** Last successful orchestrator run on this sheet (for PDF + reload); persisted in sessionStorage */
   const [orchestratorRunReport, setOrchestratorRunReport] = useState(null);
+  const [orchestratorAgentGoalMaxSteps, setOrchestratorAgentGoalMaxSteps] = useState(12);
+  const [orchestratorAgentGoalRunning, setOrchestratorAgentGoalRunning] = useState(false);
 
   // Auto-dismiss notifications after 8 seconds
   useEffect(() => {
@@ -116,6 +141,11 @@ function App() {
   const intervalTimersRef = useRef({});
   // Ref to store latest cells for autorun dependency checking
   const cellsRef = useRef(cells);
+  /** When true, dependent autoRun chains are skipped so the agent goal loop controls order. */
+  const agentGoalLoopSuppressAutoRunRef = useRef(false);
+  const agentGoalSessionRef = useRef(null);
+  const agentGoalPendingPollCellIdRef = useRef(null);
+  const handleRunCellRef = useRef(null);
   // Ref to store latest runningCells to avoid stale closures
   const runningCellsRef = useRef(new Set());
   // Queue for auto-run requests to prevent concurrent API calls
@@ -256,6 +286,43 @@ function App() {
       localStorage.setItem(storageKey, activeSheet.id);
     }
   }, [user, currentProjectId, activeSheet]);
+
+  // Load manual connection lines for the active sheet (persisted on the sheet document)
+  useLayoutEffect(() => {
+    if (!activeSheet?.id) {
+      setConnections([]);
+      return;
+    }
+    const raw = activeSheet.manualConnections;
+    setConnections(Array.isArray(raw) ? raw : []);
+  }, [activeSheet?.id, activeSheet?.manualConnections]);
+
+  useEffect(() => {
+    if (!user?.uid || !currentProjectId || !activeSheet?.id) return;
+    if (connectionsSaveTimerRef.current) clearTimeout(connectionsSaveTimerRef.current);
+    connectionsSaveTimerRef.current = setTimeout(async () => {
+      connectionsSaveTimerRef.current = null;
+      const sheetId = activeSheet.id;
+      try {
+        await updateSheet(user.uid, currentProjectId, sheetId, { manualConnections: connections });
+        setSheets((prev) =>
+          prev.map((s) => (s.id === sheetId ? { ...s, manualConnections: connections } : s))
+        );
+        setActiveSheet((prev) =>
+          prev && prev.id === sheetId ? { ...prev, manualConnections: connections } : prev
+        );
+        scheduleProjectTouch();
+      } catch {
+        // ignore
+      }
+    }, 650);
+    return () => {
+      if (connectionsSaveTimerRef.current) {
+        clearTimeout(connectionsSaveTimerRef.current);
+        connectionsSaveTimerRef.current = null;
+      }
+    };
+  }, [connections, user?.uid, currentProjectId, activeSheet?.id, scheduleProjectTouch]);
 
   // Keep cellsRef in sync with cells state
   useEffect(() => {
@@ -568,7 +635,8 @@ function App() {
         numRows: sourceSheet.numRows || 10,
         numCols: sourceSheet.numCols || 10,
         order: maxOrder + 1,
-        cardPositions: sourceSheet.cardPositions || {}
+        cardPositions: sourceSheet.cardPositions || {},
+        manualConnections: Array.isArray(sourceSheet.manualConnections) ? sourceSheet.manualConnections : []
       });
 
       if (!newSheetResult.success || !newSheetResult.sheetId) {
@@ -612,6 +680,7 @@ function App() {
       
       // Reload sheets - this will automatically switch to the new sheet
       await loadSheets(user.uid, currentProjectId);
+      scheduleProjectTouch();
 
       setNotification({
         type: 'success',
@@ -775,6 +844,7 @@ function App() {
       // Don't await - let it save in background so UI updates immediately
       saveCell(user.uid, currentProjectId, activeSheet.id, cellId, updatedCell).catch(error => {
       });
+      scheduleProjectTouch();
     }
 
     // Check for dependent cells with autoRun when output changes
@@ -968,6 +1038,7 @@ function App() {
             };
             saveCell(user.uid, currentProjectId, activeSheet.id, cellId, cellToSave).catch(error => {
             });
+            scheduleProjectTouch();
           }
         }, 0);
       }
@@ -995,6 +1066,7 @@ function App() {
               y: typeof latestCell.y === 'number' ? latestCell.y : parseFloat(latestCell.y) || 0 
             };
             await saveCell(user.uid, currentProjectId, activeSheet.id, cellId, cellToSave);
+            scheduleProjectTouch();
           }
           delete positionSaveTimers.current[cellId];
         } catch (error) {
@@ -1123,7 +1195,112 @@ function App() {
     console.log('🛑 Stopped cells:', Array.from(cellsToStop));
   };
 
-  const handleRunCell = async (cellId) => {
+  const finishAgentGoalLoop = useCallback((notify) => {
+    agentGoalLoopSuppressAutoRunRef.current = false;
+    agentGoalSessionRef.current = null;
+    agentGoalPendingPollCellIdRef.current = null;
+    setOrchestratorAgentGoalRunning(false);
+    if (notify && typeof notify === 'object') {
+      setNotification(notify);
+    }
+  }, []);
+
+  const getTextModelIdForOrchestrator = useCallback(() => {
+    const textModels = (availableModels || []).filter((m) => {
+      const id = m.originalId || m.id;
+      return id && getModelType(id) === 'text' && m.isActive !== false && m.status !== 'inactive';
+    });
+    if (textModels.length > 0) {
+      const m = textModels[0];
+      return m.originalId || m.id;
+    }
+    return 'gpt-4o-mini';
+  }, [availableModels]);
+
+  const continueAgentGoalAfterCell = useCallback(
+    async (completedCellId) => {
+      const session = agentGoalSessionRef.current;
+      if (!session || !agentGoalLoopSuppressAutoRunRef.current) return;
+
+      session.orchestratorRound += 1;
+      if (session.orchestratorRound > session.maxSteps) {
+        finishAgentGoalLoop({
+          type: 'info',
+          title: 'Agent goal loop',
+          message: `Stopped after ${session.maxSteps} orchestrator step(s).`,
+          showUpgrade: false
+        });
+        return;
+      }
+
+      try {
+        const plan = await planAgentGoalStep(
+          session.mainGoal,
+          cellsRef.current,
+          session.decisionHistory,
+          session.orchestratorRound,
+          session.maxSteps,
+          getTextModelIdForOrchestrator
+        );
+
+        if (!plan.success) {
+          finishAgentGoalLoop({
+            type: 'error',
+            title: 'Agent goal loop',
+            message: plan.error || 'Planner failed.',
+            showUpgrade: false
+          });
+          return;
+        }
+
+        session.decisionHistory.push({
+          round: session.orchestratorRound,
+          cellCompleted: completedCellId,
+          plan
+        });
+
+        if (plan.done) {
+          finishAgentGoalLoop({
+            type: 'success',
+            title: 'Goal complete',
+            message: plan.summary || plan.reason || 'The orchestrator considers the main goal satisfied.',
+            showUpgrade: false
+          });
+          return;
+        }
+
+        const nextId = plan.next_cell_id;
+        if (!nextId || !handleRunCellRef.current) {
+          finishAgentGoalLoop({
+            type: 'error',
+            title: 'Agent goal loop',
+            message: 'Could not run the next card.',
+            showUpgrade: false
+          });
+          return;
+        }
+
+        const execOpts = {
+          useAgentOrchestration: true,
+          workspaceMainGoal: session.mainGoal,
+          orchestratorDirective: plan.next_instruction || ''
+        };
+
+        await handleRunCellRef.current(nextId, { executionOptions: execOpts });
+      } catch (e) {
+        console.error('continueAgentGoalAfterCell:', e);
+        finishAgentGoalLoop({
+          type: 'error',
+          title: 'Agent goal loop',
+          message: e?.message || 'Agent loop failed.',
+          showUpgrade: false
+        });
+      }
+    },
+    [finishAgentGoalLoop, getTextModelIdForOrchestrator]
+  );
+
+  const handleRunCell = async (cellId, runOptions = {}) => {
     if (!user || !currentProjectId || !activeSheet) return;
     if (runningCells.has(cellId)) return;
 
@@ -1151,6 +1328,7 @@ function App() {
         currentSheet: { ...activeSheet, cells },
         getLatestCells: () => cellsRef.current, // Provide function to get latest cell state
         runningCellsSet: runningCellsRef.current, // Provide Set of currently running cells
+        executionOptions: runOptions.executionOptions,
         onProgress: ({ status, cellId: progressCellId, output, error, updatedCell, message }) => {
           if (status === 'complete' && output) {
             // Pass the full updatedCell (including generations) to ensure dependency checker sees completed status
@@ -1229,6 +1407,9 @@ function App() {
 
       // Check if result needs polling (async job like video generation)
       if (result.needsPolling && result.jobId) {
+        if (agentGoalLoopSuppressAutoRunRef.current) {
+          agentGoalPendingPollCellIdRef.current = cellId;
+        }
         // Update local state immediately to show loading status
         const updatedCellWithStatus = {
           ...cell,
@@ -1280,8 +1461,29 @@ function App() {
                   ...(updatedCell || {})
                 }
               };
+              if (
+                agentGoalLoopSuppressAutoRunRef.current &&
+                agentGoalPendingPollCellIdRef.current === progressCellId
+              ) {
+                agentGoalPendingPollCellIdRef.current = null;
+                continueAgentGoalAfterCell(progressCellId).catch((err) =>
+                  console.error('Agent goal loop after async job:', err)
+                );
+              }
             } else if (status === 'error') {
               handleCellUpdate(progressCellId, undefined, `Error: ${error}`, updatedCell);
+              if (
+                agentGoalLoopSuppressAutoRunRef.current &&
+                agentGoalPendingPollCellIdRef.current === progressCellId
+              ) {
+                agentGoalPendingPollCellIdRef.current = null;
+                finishAgentGoalLoop({
+                  type: 'error',
+                  title: 'Agent goal loop',
+                  message: error || 'Generation failed.',
+                  showUpgrade: false
+                });
+              }
             } else if (status === 'polling' || status === 'running' || status === 'pending') {
               // Update status in cells during polling
               setCells(prev => ({
@@ -1305,90 +1507,107 @@ function App() {
       }
 
       if (result.success) {
-        // Cell output already updated via onProgress callback
-        // Wait a bit for state to update, then check for dependent cells with autorun
-        await new Promise(resolve => setTimeout(resolve, 50));
-        
-        // Always check for dependent cells with autorun (like master source)
-        // The master source calls runDependentCells after every cell run
-        // and filters to only run cells with autorun enabled
-        // Use cellsRef to get the latest cells state
-        const currentCells = cellsRef.current;
-        const allSheets = sheets.map(s => ({
-          ...s,
-          cells: s.id === activeSheet.id ? currentCells : {}
-        }));
-        const dependents = findDependentCells(cellId, allSheets);
-        
-        // Filter to only cells with autorun enabled in the current sheet
-        const autoRunDependents = dependents.filter(dep => {
-          if (dep.sheetId === activeSheet.id) {
-            const depCell = currentCells[dep.cellId];
-            return depCell && depCell.autoRun && depCell.prompt;
+        if (agentGoalLoopSuppressAutoRunRef.current) {
+          if (!result.needsPolling) {
+            await continueAgentGoalAfterCell(cellId);
           }
-          return false;
-        });
+        } else {
+          // Cell output already updated via onProgress callback
+          // Wait a bit for state to update, then check for dependent cells with autorun
+          await new Promise(resolve => setTimeout(resolve, 50));
 
-        // Run dependent cells sequentially (one at a time)
-        // Only run cells that have ALL their dependencies complete
-        // Use the same robust dependency checking logic as runCell
-        const { areAllDependenciesComplete } = await import('./services/cellExecution');
-        
-        for (const dependent of autoRunDependents) {
-          if (dependent.sheetId === activeSheet.id && !runningCells.has(dependent.cellId)) {
-            const depCell = currentCells[dependent.cellId];
-            
-            // Check if all dependencies of this dependent cell are complete
-            // Use the same robust function that runCell uses for consistency
-            if (depCell && depCell.prompt) {
-              // Create a proper currentSheet object with the latest cells
-              const currentSheetWithCells = {
-                ...activeSheet,
-                cells: currentCells
-              };
-              
-              // Check if all dependencies are complete using the robust function
-              // This handles: cross-sheet refs, generation refs, running cells, proper validation
-              const allDepsComplete = await areAllDependenciesComplete(
-                depCell,
-                allSheets,
-                currentSheetWithCells,
-                () => cellsRef.current, // getLatestCells function - always get latest state
-                runningCellsRef.current, // runningCellsSet - check if deps are running
-                user.uid, // userId for loading cross-sheet cells
-                currentProjectId // projectId for loading cross-sheet cells
-              );
-              
-              // Only run if all dependencies are complete
-              if (allDepsComplete) {
-                // Recursively run dependent cell (it will trigger its own dependents if they have autorun)
-                await handleRunCell(dependent.cellId);
+          // Always check for dependent cells with autorun (like master source)
+          // The master source calls runDependentCells after every cell run
+          // and filters to only run cells with autorun enabled
+          // Use cellsRef to get the latest cells state
+          const currentCells = cellsRef.current;
+          const allSheets = sheets.map(s => ({
+            ...s,
+            cells: s.id === activeSheet.id ? currentCells : {}
+          }));
+          const dependents = findDependentCells(cellId, allSheets);
+
+          // Filter to only cells with autorun enabled in the current sheet
+          const autoRunDependents = dependents.filter(dep => {
+            if (dep.sheetId === activeSheet.id) {
+              const depCell = currentCells[dep.cellId];
+              return depCell && depCell.autoRun && depCell.prompt;
+            }
+            return false;
+          });
+
+          // Run dependent cells sequentially (one at a time)
+          // Only run cells that have ALL their dependencies complete
+          // Use the same robust dependency checking logic as runCell
+          const { areAllDependenciesComplete } = await import('./services/cellExecution');
+
+          for (const dependent of autoRunDependents) {
+            if (dependent.sheetId === activeSheet.id && !runningCells.has(dependent.cellId)) {
+              const depCell = currentCells[dependent.cellId];
+
+              // Check if all dependencies of this dependent cell are complete
+              // Use the same robust function that runCell uses for consistency
+              if (depCell && depCell.prompt) {
+                // Create a proper currentSheet object with the latest cells
+                const currentSheetWithCells = {
+                  ...activeSheet,
+                  cells: currentCells
+                };
+
+                // Check if all dependencies are complete using the robust function
+                // This handles: cross-sheet refs, generation refs, running cells, proper validation
+                const allDepsComplete = await areAllDependenciesComplete(
+                  depCell,
+                  allSheets,
+                  currentSheetWithCells,
+                  () => cellsRef.current, // getLatestCells function - always get latest state
+                  runningCellsRef.current, // runningCellsSet - check if deps are running
+                  user.uid, // userId for loading cross-sheet cells
+                  currentProjectId // projectId for loading cross-sheet cells
+                );
+
+                // Only run if all dependencies are complete
+                if (allDepsComplete) {
+                  // Recursively run dependent cell (it will trigger its own dependents if they have autorun)
+                  await handleRunCell(dependent.cellId);
+                }
               }
             }
           }
         }
       }
     } catch (error) {
-      // Check if error is about insufficient credits
       const errorMessage = error?.message || error?.toString() || '';
+      const inAgentGoalLoop = agentGoalLoopSuppressAutoRunRef.current;
+      if (inAgentGoalLoop) {
+        agentGoalPendingPollCellIdRef.current = null;
+      }
+
       if (errorMessage.includes('Insufficient credits')) {
-        // Extract credit information from error message
         const creditMatch = errorMessage.match(/You need (\d+) credits but only have (\d+)/);
         const needed = creditMatch ? creditMatch[1] : 'some';
         const current = creditMatch ? creditMatch[2] : '0';
-        
-        // Show user-friendly notification
+
         setNotification({
           type: 'error',
           title: 'Insufficient Credits',
           message: `You need ${needed} credit${needed !== '1' ? 's' : ''} to run this cell, but you only have ${current}. Please upgrade your subscription to continue.`,
           showUpgrade: true
         });
-        
-        // Automatically open subscription modal
+
         setShowSubscription(true);
+
+        if (inAgentGoalLoop) {
+          finishAgentGoalLoop();
+        }
+      } else if (inAgentGoalLoop) {
+        finishAgentGoalLoop({
+          type: 'error',
+          title: 'Agent goal loop',
+          message: errorMessage || 'A cell run failed.',
+          showUpgrade: false
+        });
       } else {
-        // Show generic error notification
         setNotification({
           type: 'error',
           title: 'Error',
@@ -1402,6 +1621,78 @@ function App() {
         next.delete(cellId);
         runningCellsRef.current = next; // Keep ref in sync
         return next;
+      });
+    }
+  };
+
+  useEffect(() => {
+    handleRunCellRef.current = handleRunCell;
+  });
+
+  const handleRunAgentGoalLoop = async () => {
+    if (orchestratorRunning) return;
+    const goal = orchestratorPrompt.trim();
+    if (!goal || !user || !currentProjectId || !activeSheet) return;
+
+    const maxSteps = Math.min(Math.max(Number(orchestratorAgentGoalMaxSteps) || 12, 1), 30);
+
+    setOrchestratorAgentGoalRunning(true);
+    agentGoalLoopSuppressAutoRunRef.current = true;
+    agentGoalPendingPollCellIdRef.current = null;
+    agentGoalSessionRef.current = {
+      mainGoal: goal,
+      maxSteps,
+      orchestratorRound: 1,
+      decisionHistory: []
+    };
+
+    try {
+      const session = agentGoalSessionRef.current;
+      const plan = await planAgentGoalStep(
+        goal,
+        cellsRef.current,
+        session.decisionHistory,
+        1,
+        maxSteps,
+        getTextModelIdForOrchestrator
+      );
+
+      if (!plan.success) {
+        finishAgentGoalLoop({
+          type: 'error',
+          title: 'Agent goal loop',
+          message: plan.error || 'Planner failed.',
+          showUpgrade: false
+        });
+        return;
+      }
+
+      session.decisionHistory.push({ round: 1, plan });
+
+      if (plan.done) {
+        finishAgentGoalLoop({
+          type: 'success',
+          title: 'Goal complete',
+          message: plan.summary || plan.reason || 'The orchestrator considers the main goal satisfied.',
+          showUpgrade: false
+        });
+        return;
+      }
+
+      const execOpts = {
+        useAgentOrchestration: true,
+        workspaceMainGoal: goal,
+        orchestratorDirective: plan.next_instruction || ''
+      };
+
+      await handleRunCell(plan.next_cell_id, { executionOptions: execOpts });
+    } catch (e) {
+      console.error('handleRunAgentGoalLoop:', e);
+      finishAgentGoalLoop({
+        type: 'error',
+        title: 'Agent goal loop',
+        message: e?.message || 'Agent loop failed to start.',
+        showUpgrade: false
       });
     }
   };
@@ -1483,6 +1774,7 @@ function App() {
 
     try {
       await saveCell(user.uid, currentProjectId, activeSheet.id, cellId, newCell);
+      scheduleProjectTouch();
       return cellId;
     } catch (error) {
       return null;
@@ -1507,6 +1799,7 @@ function App() {
   };
 
   const handleRunOrchestrator = async () => {
+    if (orchestratorAgentGoalRunning) return;
     const goal = orchestratorPrompt.trim();
     if (!goal || !user || !currentProjectId || !activeSheet) {
       setNotification({
@@ -1538,6 +1831,7 @@ function App() {
 
       const pipeline = await runOrchestratorHandoffPipeline(goal, availableModels, {
         maxPhases,
+        userId: user.uid,
         onProgress: (ev) => {
           runEvents.push(ev);
           setOrchestratorHandoffLog((prev) => [...prev, ev]);
@@ -1743,6 +2037,38 @@ function App() {
           name: cellTemplate.name || ''
         }, cellId);
       }
+
+      if (Array.isArray(template.connections) && template.connections.length > 0 && activeSheet?.id) {
+        const merged = [];
+        for (const c of template.connections) {
+          const s = String(c.source || c.source_cell_id || c.from || '').trim().toUpperCase();
+          const t = String(c.target || c.target_cell_id || c.to || '').trim().toUpperCase();
+          if (!s || !t) continue;
+          try {
+            await saveConnection(activeSheet.id, s, t);
+          } catch {
+            // Still merge into UI so dependency lines show if API store is unavailable
+          }
+          merged.push({ source_cell_id: s, target_cell_id: t });
+        }
+        if (merged.length > 0) {
+          setConnections((prev) => {
+            const next = [...prev];
+            for (const cn of merged) {
+              if (
+                !next.some(
+                  (x) => x.source_cell_id === cn.source_cell_id && x.target_cell_id === cn.target_cell_id
+                )
+              ) {
+                next.push(cn);
+              }
+            }
+            return next;
+          });
+        }
+      }
+
+      scheduleProjectTouch();
 
       setNotification({
         type: 'success',
@@ -1998,7 +2324,29 @@ function App() {
       });
 
       // Orchestrator activity (planning log + phase templates) when this sheet was built via Orchestrator
-      const orchReport = orchestratorRunReport;
+      // Prefer React state; fall back to sessionStorage so PDF export still includes the section after reload
+      // or if state has not hydrated yet when the user downloads immediately after a run.
+      let orchReport = orchestratorRunReport;
+      if (
+        user &&
+        currentProjectId &&
+        activeSheet?.id &&
+        (!orchReport || !Array.isArray(orchReport.phases) || orchReport.phases.length === 0)
+      ) {
+        try {
+          const raw = sessionStorage.getItem(
+            orchestratorReportStorageKey(user.uid, currentProjectId, activeSheet.id)
+          );
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object' && Array.isArray(parsed.phases) && parsed.phases.length > 0) {
+              orchReport = parsed;
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }
       if (
         orchReport &&
         activeSheet &&
@@ -2298,9 +2646,14 @@ function App() {
   // Show admin dashboard if requested
   if (showAdmin && user) {
     return (
-      <AdminDashboard 
-        user={user} 
+      <AdminDashboard
+        user={user}
         onBack={() => setShowAdmin(false)}
+        onCreditsGranted={(targetUserId) => {
+          if (targetUserId === user.uid) {
+            loadUserCredits(user.uid);
+          }
+        }}
       />
     );
   }
@@ -2813,7 +3166,7 @@ function App() {
 
       {showOrchestratorModal && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-gray-900 border border-white/10 rounded-2xl max-w-lg w-full shadow-2xl p-6 space-y-4">
+          <div className="bg-gray-900 border border-white/10 rounded-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl p-6 space-y-4">
             <div className="flex items-start justify-between gap-2">
               <div>
                 <h3 className="text-lg font-semibold text-white flex items-center gap-2">
@@ -2821,14 +3174,16 @@ function App() {
                   Orchestrator
                 </h3>
                 <p className="text-sm text-gray-400 mt-1">
-                  Describe your main goal. The orchestrator may run several templates in sequence (hand-offs): each phase can use a different template or create one, until the goal is satisfied or the phase limit is reached. Repeating the same template is blocked to avoid loops.
+                  Describe your main goal — this is the single outcome you want across the sheet. Template hand-off runs several templates in sequence and can replace the canvas each phase. Agent goal loop keeps your existing cards: each run produces a structured report (research, plan, review, JSON), then the orchestrator picks which card runs next until the goal is met or the step limit is reached.
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => !orchestratorRunning && setShowOrchestratorModal(false)}
+                onClick={() =>
+                  !orchestratorRunning && !orchestratorAgentGoalRunning && setShowOrchestratorModal(false)
+                }
                 className="p-1 text-gray-400 hover:text-white shrink-0"
-                disabled={orchestratorRunning}
+                disabled={orchestratorRunning || orchestratorAgentGoalRunning}
               >
                 <X size={20} />
               </button>
@@ -2839,7 +3194,7 @@ function App() {
                 value={orchestratorPrompt}
                 onChange={(e) => setOrchestratorPrompt(e.target.value)}
                 rows={5}
-                disabled={orchestratorRunning}
+                disabled={orchestratorRunning || orchestratorAgentGoalRunning}
                 placeholder="e.g. Daily AI newsletter with research, draft, subject lines, and email digest…"
                 className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white placeholder:text-gray-500"
               />
@@ -2857,11 +3212,30 @@ function App() {
                       Math.min(10, Math.max(1, parseInt(e.target.value, 10) || 5))
                     )
                   }
-                  disabled={orchestratorRunning}
+                  disabled={orchestratorRunning || orchestratorAgentGoalRunning}
                   className="w-16 bg-black/40 border border-white/10 rounded px-2 py-1 text-sm text-white"
                 />
               </label>
               <span className="text-xs text-gray-500">1–10 (stops early if the goal is met)</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="text-sm text-gray-300 flex items-center gap-2">
+                Max agent loop steps
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={orchestratorAgentGoalMaxSteps}
+                  onChange={(e) =>
+                    setOrchestratorAgentGoalMaxSteps(
+                      Math.min(30, Math.max(1, parseInt(e.target.value, 10) || 12))
+                    )
+                  }
+                  disabled={orchestratorRunning || orchestratorAgentGoalRunning}
+                  className="w-16 bg-black/40 border border-white/10 rounded px-2 py-1 text-sm text-white"
+                />
+              </label>
+              <span className="text-xs text-gray-500">Orchestrator rounds (1 card per round)</span>
             </div>
             {orchestratorHandoffLog.length > 0 && (
               <div className="max-h-32 overflow-y-auto rounded-lg bg-black/30 border border-white/5 p-2 text-xs font-mono text-gray-400 space-y-1">
@@ -2877,22 +3251,40 @@ function App() {
                 ))}
               </div>
             )}
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <button
                 type="button"
-                onClick={() => !orchestratorRunning && setShowOrchestratorModal(false)}
+                onClick={() =>
+                  !orchestratorRunning && !orchestratorAgentGoalRunning && setShowOrchestratorModal(false)
+                }
                 className="px-4 py-2 text-sm text-gray-300 hover:bg-white/5 rounded-lg"
-                disabled={orchestratorRunning}
+                disabled={orchestratorRunning || orchestratorAgentGoalRunning}
               >
                 Cancel
               </button>
               <button
                 type="button"
+                onClick={handleRunAgentGoalLoop}
+                disabled={
+                  orchestratorRunning ||
+                  orchestratorAgentGoalRunning ||
+                  !orchestratorPrompt.trim()
+                }
+                className="px-4 py-2 text-sm font-medium bg-violet-600 hover:bg-violet-500 disabled:bg-gray-600 rounded-lg text-white"
+              >
+                {orchestratorAgentGoalRunning ? 'Agent loop…' : 'Run agent goal loop'}
+              </button>
+              <button
+                type="button"
                 onClick={handleRunOrchestrator}
-                disabled={orchestratorRunning || !orchestratorPrompt.trim()}
+                disabled={
+                  orchestratorRunning ||
+                  orchestratorAgentGoalRunning ||
+                  !orchestratorPrompt.trim()
+                }
                 className="px-4 py-2 text-sm font-medium bg-amber-600 hover:bg-amber-500 disabled:bg-gray-600 rounded-lg text-white"
               >
-                {orchestratorRunning ? 'Working…' : 'Run'}
+                {orchestratorRunning ? 'Working…' : 'Run template hand-off'}
               </button>
             </div>
           </div>
@@ -2905,6 +3297,7 @@ function App() {
         onClose={() => setShowTemplates(false)}
         onSelectTemplate={applyTemplate}
         availableModels={availableModels}
+        userId={user?.uid || null}
       />
 
       <GenerationSelectModal

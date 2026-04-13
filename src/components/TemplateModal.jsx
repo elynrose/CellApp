@@ -3,10 +3,10 @@ import { X, Sparkles, Search, Filter } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getAllTemplates as getLocalTemplates, TEMPLATE_CATEGORIES } from '../data/templates';
-import { getAllTemplates, createTemplate } from '../firebase/firestore';
+import { getAllTemplates, createTemplate, getUserTemplates, createUserTemplate } from '../firebase/firestore';
 import { getModelType, generateAI } from '../api';
 
-const TemplateModal = ({ isOpen, onClose, onSelectTemplate, availableModels = [] }) => {
+const TemplateModal = ({ isOpen, onClose, onSelectTemplate, availableModels = [], userId = null }) => {
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -23,21 +23,32 @@ const TemplateModal = ({ isOpen, onClose, onSelectTemplate, availableModels = []
     if (isOpen) {
       loadTemplates();
     }
-  }, [isOpen]);
+  }, [isOpen, userId]);
 
   const loadTemplates = async () => {
     setLoading(true);
     try {
-      const result = await getAllTemplates();
-      if (result.success && result.data) {
-        setTemplates(result.data);
-      } else {
-        // Fallback to local templates if Firestore fails
-        const localTemplates = getLocalTemplates();
-        setTemplates(localTemplates);
+      const [globalRes, mineRes] = await Promise.all([
+        getAllTemplates(),
+        userId ? getUserTemplates(userId) : Promise.resolve({ success: true, data: [] })
+      ]);
+      const localTemplates = getLocalTemplates();
+      const byId = new Map();
+      for (const t of localTemplates) {
+        if (t?.id) byId.set(t.id, t);
       }
+      if (globalRes.success && Array.isArray(globalRes.data)) {
+        for (const t of globalRes.data) {
+          if (t?.id) byId.set(t.id, t);
+        }
+      }
+      if (mineRes.success && Array.isArray(mineRes.data)) {
+        for (const t of mineRes.data) {
+          if (t?.id) byId.set(t.id, t);
+        }
+      }
+      setTemplates([...byId.values()]);
     } catch (error) {
-      // Fallback to local templates
       const localTemplates = getLocalTemplates();
       setTemplates(localTemplates);
     } finally {
@@ -211,7 +222,9 @@ const TemplateModal = ({ isOpen, onClose, onSelectTemplate, availableModels = []
         throw new Error('Generated template is missing required fields (name or cells). Please try again.');
       }
 
-      const saveResult = await createTemplate(normalized);
+      const saveResult = userId
+        ? await createUserTemplate(userId, normalized)
+        : await createTemplate(normalized);
       if (!saveResult.success) {
         throw new Error(saveResult.error || 'Failed to save template');
       }
