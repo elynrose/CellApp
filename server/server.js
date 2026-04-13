@@ -320,6 +320,12 @@ function stripAnthropicModelId(model) {
     .trim();
 }
 
+/**
+ * Anthropic output cap: many models (e.g. Haiku) reject max_tokens above 4096.
+ * Do not use 8192 here — API returns 400 "max_tokens is too large" for those models.
+ */
+const ANTHROPIC_MAX_OUTPUT_TOKENS_CAP = 4096;
+
 /** Claude — Messages API (https://docs.anthropic.com/) */
 async function anthropicMessagesChat(apiKey, model, prompt, temperature, maxTokens) {
   const nk = normalizeApiKeyString(apiKey);
@@ -327,7 +333,10 @@ async function anthropicMessagesChat(apiKey, model, prompt, temperature, maxToke
   const modelId = stripAnthropicModelId(model);
   const body = {
     model: modelId,
-    max_tokens: maxTokens && maxTokens > 0 ? Math.min(maxTokens, 8192) : 4096,
+    max_tokens:
+      maxTokens && maxTokens > 0
+        ? Math.min(maxTokens, ANTHROPIC_MAX_OUTPUT_TOKENS_CAP)
+        : ANTHROPIC_MAX_OUTPUT_TOKENS_CAP,
     messages: [{ role: 'user', content: prompt }],
     temperature: temperature ?? 1
   };
@@ -339,11 +348,18 @@ async function anthropicMessagesChat(apiKey, model, prompt, temperature, maxToke
   return { text };
 }
 
+/** Max response body for httpOrHttpsGet (Fal paginated /v1/models can exceed 100KB). */
+const HTTP_GET_MAX_BODY = 12 * 1024 * 1024;
+
 /**
  * Lightweight GET probe for API key validation (no full generation).
  * Many providers block or throttle requests without a User-Agent.
+ * @param {string} urlStr
+ * @param {Record<string, string>} [headers]
+ * @param {{ maxBodyBytes?: number }} [options]
  */
-function httpOrHttpsGet(urlStr, headers = {}) {
+function httpOrHttpsGet(urlStr, headers = {}, options = {}) {
+  const maxBody = options.maxBodyBytes ?? HTTP_GET_MAX_BODY;
   return new Promise((resolve, reject) => {
     let u;
     try {
@@ -356,6 +372,8 @@ function httpOrHttpsGet(urlStr, headers = {}) {
     const port = u.port ? Number(u.port) : (u.protocol === 'https:' ? 443 : 80);
     const mergedHeaders = {
       Accept: 'application/json',
+      /** Ask for uncompressed body — we concat strings and JSON.parse (gzip would break). */
+      'Accept-Encoding': 'identity',
       'User-Agent': 'Cellulai-KeyProbe/1.0 (https://github.com/elynrose/CellApp)',
       ...headers
     };
@@ -370,11 +388,19 @@ function httpOrHttpsGet(urlStr, headers = {}) {
       },
       (res) => {
         let buf = '';
+        let aborted = false;
         res.on('data', (c) => {
+          if (aborted) return;
           buf += c;
-          if (buf.length > 8192) buf = buf.slice(0, 8192);
+          if (buf.length > maxBody) {
+            aborted = true;
+            req.destroy();
+            reject(new Error(`Response body exceeded ${maxBody} bytes`));
+          }
         });
-        res.on('end', () => resolve({ status: res.statusCode, body: buf }));
+        res.on('end', () => {
+          if (!aborted) resolve({ status: res.statusCode, body: buf });
+        });
       }
     );
     req.on('error', reject);
@@ -638,11 +664,17 @@ async function fetchAllFalModelsList(apiKey) {
     if (status !== 200) {
       throw new Error(`Fal models API returned ${status}: ${body.substring(0, 500)}`);
     }
+    const raw = String(body || '').replace(/^\uFEFF/, '').trim();
     let j;
     try {
-      j = JSON.parse(body);
-    } catch {
-      throw new Error('Invalid JSON from Fal models API');
+      j = JSON.parse(raw);
+    } catch (e) {
+      const hint = raw.startsWith('<')
+        ? ' (response looks like HTML, not JSON — check API URL or proxy)'
+        : '';
+      throw new Error(
+        `Invalid JSON from Fal models API${hint}: ${e?.message || 'parse error'} — first 200 chars: ${raw.substring(0, 200)}`
+      );
     }
     const models = j.models || [];
     for (const m of models) {
